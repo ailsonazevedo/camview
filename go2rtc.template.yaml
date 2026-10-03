@@ -1,0 +1,14 @@
+# Config base do go2rtc. O setup copia para data/go2rtc.yaml (fora do git, pois
+# o go2rtc grava ali as streams com senha). As câmeras são gerenciadas pela
+# API do CamView — não precisa editar streams aqui.
+api:
+  listen: "127.0.0.1:1984"   # só acessível pelo próprio Mac (o servidor/vite faz proxy)
+
+rtsp:
+  listen: ""                 # não precisamos re-publicar RTSP
+
+webrtc:
+  listen: ":8555"            # TCP/UDP para mídia WebRTC na LAN (IPs locais são anunciados automaticamente)
+
+log:
+  level: info

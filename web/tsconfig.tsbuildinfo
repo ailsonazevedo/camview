@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/aim.tsx","./src/components/cameraform.tsx","./src/components/cameraplayer.tsx","./src/components/ptzpad.tsx","./src/components/talkcontrols.tsx","./src/lib/aim.ts","./src/lib/api.ts","./src/lib/talk.ts","./src/lib/vision.ts","./src/pages/live.tsx","./src/pages/manage.tsx"],"version":"5.9.3"}

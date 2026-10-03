@@ -1,0 +1,17 @@
+{
+  "name": "camview",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "setup": "bash scripts/setup-go2rtc.sh && npm install",
+    "go2rtc": "./bin/go2rtc -config data/go2rtc.yaml",
+    "dev": "concurrently -k -n go2rtc,server,web -c magenta,blue,green \"npm run go2rtc\" \"npm -w server run dev\" \"npm -w web run dev\"",
+    "build": "npm -w web run build",
+    "start": "npm run build && concurrently -k -n go2rtc,server -c magenta,blue \"npm run go2rtc\" \"npm -w server start\"",
+    "typecheck": "npm -w server run typecheck && npm -w web run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
