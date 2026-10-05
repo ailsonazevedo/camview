@@ -94,6 +94,59 @@ export async function readDeviceInfo(cam: Camera): Promise<DeviceInfo> {
   });
 }
 
+export interface CameraHealth {
+  model?: string;
+  /** Versão do firmware (SoftWareVersion). */
+  firmware?: string;
+  /** Data de compilação do firmware. */
+  buildTime?: string;
+  serial?: string;
+  /** Tempo ligado, em segundos (quando a câmera informa). */
+  uptimeSeconds?: number;
+  /** Sinal do Wi-Fi em %, 0–100 (null = cabeada ou não informado). */
+  wifiSignal?: number | null;
+}
+
+/** Converte o DeviceRunTime da XM (hex "0x..." ou número) em segundos. */
+function parseRunTime(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v) {
+    const n = v.startsWith('0x') || v.startsWith('0X') ? Number.parseInt(v, 16) : Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+/** Normaliza o nível de Wi-Fi que a câmera manda (0–100 direto, ou 0–4 em barras). */
+function parseWifi(cfg: Record<string, any> | undefined): number | null {
+  if (!cfg) return null;
+  const raw = cfg.SignalLevel ?? cfg.Signal ?? cfg.Intensity;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  if (raw <= 4) return Math.round((raw / 4) * 100); // em barras (0–4)
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
+/** Saúde da câmera: firmware, tempo ligado, série e sinal de Wi-Fi (via DVRIP). */
+export async function readHealth(cam: Camera): Promise<CameraHealth> {
+  return withClient(cam, async (c) => {
+    const info = (await c.command(MSG.SYSTEM_INFO, 'SystemInfo')).SystemInfo ?? {};
+    let wifiSignal: number | null = null;
+    try {
+      // Não suportado em câmera cabeada: ignora o erro e deixa null.
+      const wifi = await c.command(MSG.CONFIG_GET, 'NetWork.Wifi');
+      wifiSignal = parseWifi(wifi['NetWork.Wifi'] ?? wifi.NetWork?.Wifi);
+    } catch {}
+    return {
+      model: info.HardWare,
+      firmware: info.SoftWareVersion,
+      buildTime: info.BuildTime,
+      serial: info.SerialNo,
+      uptimeSeconds: parseRunTime(info.DeviceRunTime),
+      wifiSignal,
+    };
+  });
+}
+
 /**
  * Pulso de movimento com duração medida aqui no servidor (mais preciso que
  * start/stop pelo navegador) — usado pela mira por clique.

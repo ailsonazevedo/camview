@@ -27,6 +27,8 @@ export function CameraForm({ camera, initial, onSaved, onCancel }: Props) {
     lenses: camera?.lenses ?? 'auto',
     ptzLens: camera?.ptzLens ?? 'bottom',
     lensNames: camera?.lensNames ?? { top: 'Fixa', bottom: 'Móvel' },
+    recording: camera?.recording ?? { continuous: false, quality: 'sd' },
+    events: camera?.events ?? { enabled: true, clip: true },
   }));
   const [test, setTest] = useState<TestResult | 'running' | null>(null);
   const [saving, setSaving] = useState(false);
@@ -35,7 +37,7 @@ export function CameraForm({ camera, initial, onSaved, onCancel }: Props) {
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
-    if (key !== 'name' && key !== 'lensNames' && key !== 'ptzLens' && key !== 'lenses') setTest(null);
+    if (key !== 'name' && key !== 'lensNames' && key !== 'ptzLens' && key !== 'lenses' && key !== 'recording' && key !== 'events') setTest(null);
   };
 
   const runTest = async () => {
@@ -119,6 +121,70 @@ export function CameraForm({ camera, initial, onSaved, onCancel }: Props) {
                 <input className={inputCls} value={form.lensNames.bottom} onChange={(e) => set('lensNames', { ...form.lensNames, bottom: e.target.value })} />
               </Field>
             </>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Eventos">
+        <div className="space-y-3 rounded-xl border border-white/10 p-4">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={form.events.enabled}
+              onChange={(e) => set('events', { ...form.events, enabled: e.target.checked })}
+              className="mt-0.5 h-4 w-4 accent-emerald-500"
+            />
+            <span>
+              <span className="block text-[13px] font-medium text-zinc-200">Registrar detecções no histórico</span>
+              <span className="block text-[11px] text-zinc-500">
+                Recebe os alarmes da câmera (pessoa, movimento) e salva cada um com foto. Usa a detecção configurada no app ICSee.
+              </span>
+            </span>
+          </label>
+          {form.events.enabled && (
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={form.events.clip}
+                onChange={(e) => set('events', { ...form.events, clip: e.target.checked })}
+                className="mt-0.5 h-4 w-4 accent-emerald-500"
+              />
+              <span>
+                <span className="block text-[13px] font-medium text-zinc-200">Gravar clipe de cada detecção</span>
+                <span className="block text-[11px] text-zinc-500">Vídeo em HD a partir do alarme, de 15s a 2min (≈ 2–15 MB cada).</span>
+              </span>
+            </label>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Gravação">
+        <div className="space-y-3 rounded-xl border border-white/10 p-4">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={form.recording.continuous}
+              onChange={(e) => set('recording', { ...form.recording, continuous: e.target.checked })}
+              className="mt-0.5 h-4 w-4 accent-emerald-500"
+            />
+            <span>
+              <span className="block text-[13px] font-medium text-zinc-200">Gravar o tempo todo</span>
+              <span className="block text-[11px] text-zinc-500">
+                Grava sem parar em arquivos de 10 minutos. Quando o espaço configurado acaba, as gravações mais antigas são apagadas.
+              </span>
+            </span>
+          </label>
+          {form.recording.continuous && (
+            <Field label="Qualidade da gravação contínua" hint="Estimativa por câmera; varia com a configuração de vídeo no ICSee">
+              <select
+                className={inputCls}
+                value={form.recording.quality}
+                onChange={(e) => set('recording', { ...form.recording, quality: e.target.value as 'hd' | 'sd' })}
+              >
+                <option value="sd">SD — menor (≈ 0,2–0,5 GB por hora)</option>
+                <option value="hd">HD — melhor imagem (≈ 0,5–1 GB por hora)</option>
+              </select>
+            </Field>
           )}
         </div>
       </Section>

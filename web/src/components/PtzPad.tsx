@@ -1,6 +1,6 @@
-import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Gauge, Move } from 'lucide-react';
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Check, Gauge, MapPin, Move, Plus, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, PTZ_DIRECTIONS, type PtzDirection } from '../lib/api';
+import { api, type Camera, PTZ_DIRECTIONS, type PtzDirection } from '../lib/api';
 
 const ICONS: Record<PtzDirection, typeof ArrowUp> = {
   DirectionLeftUp: ArrowUpLeft,
@@ -33,7 +33,8 @@ function loadSpeed() {
  * Joystick PTZ: segure para mover, solte para parar. Também responde às setas
  * do teclado. O servidor para o movimento sozinho após 8s se o "stop" se perder.
  */
-export function PtzPad({ cameraId, keyboard = true }: { cameraId: string; keyboard?: boolean }) {
+export function PtzPad({ camera, keyboard = true, onCameraUpdated }: { camera: Camera; keyboard?: boolean; onCameraUpdated?: () => void }) {
+  const cameraId = camera.id;
   const [active, setActive] = useState<PtzDirection | null>(null);
   const [speed, setSpeed] = useState(loadSpeed);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +92,54 @@ export function PtzPad({ cameraId, keyboard = true }: { cameraId: string; keyboa
   // garante parada ao desmontar
   useEffect(() => stop, [stop]);
 
+  // --- posições salvas (presets) ---
+  const presets = [...camera.presets].sort((a, b) => a.number - b.number);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [newName, setNewName] = useState('');
+
+  const gotoPreset = async (number: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.gotoPreset(cameraId, number);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const savePreset = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.savePreset(cameraId, name);
+      setNewName('');
+      setSaving(false);
+      onCameraUpdated?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deletePreset = async (number: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deletePreset(cameraId, number);
+      onCameraUpdated?.();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="w-[208px] select-none rounded-2xl border border-white/10 bg-zinc-950/80 p-3 shadow-2xl shadow-black/60 backdrop-blur-xl">
       <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium tracking-wider text-zinc-400 uppercase">
@@ -132,6 +181,85 @@ export function PtzPad({ cameraId, keyboard = true }: { cameraId: string; keyboa
             </button>
           );
         })}
+      </div>
+
+      {/* posições salvas */}
+      <div className="mt-3 border-t border-white/10 pt-2.5">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium tracking-wider text-zinc-400 uppercase">
+          <MapPin className="h-3.5 w-3.5 text-emerald-400" />
+          Posições
+          {!saving && (
+            <button
+              onClick={() => setSaving(true)}
+              disabled={busy}
+              title="Salvar a posição atual"
+              className="ml-auto flex items-center gap-1 rounded-md bg-white/10 px-2 py-0.5 text-[10px] font-medium text-zinc-200 hover:bg-white/15 disabled:opacity-40"
+            >
+              <Plus className="h-3 w-3" />
+              Salvar
+            </button>
+          )}
+        </div>
+
+        {saving && (
+          <div className="mb-1.5 flex items-center gap-1">
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') savePreset();
+                if (e.key === 'Escape') {
+                  setSaving(false);
+                  setNewName('');
+                }
+              }}
+              maxLength={30}
+              placeholder="Ex.: Portão"
+              className="min-w-0 flex-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/50"
+            />
+            <button onClick={savePreset} disabled={busy || !newName.trim()} title="Confirmar" className="rounded-md bg-emerald-500/20 p-1.5 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40">
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => {
+                setSaving(false);
+                setNewName('');
+              }}
+              title="Cancelar"
+              className="rounded-md p-1.5 text-zinc-400 hover:bg-white/5"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {presets.length === 0 && !saving ? (
+          <p className="text-[10px] text-zinc-600">Aponte a câmera e toque em Salvar para guardar esta posição.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {presets.map((p) => (
+              <span key={p.number} className="group flex items-center overflow-hidden rounded-md border border-white/10 bg-white/5">
+                <button
+                  onClick={() => gotoPreset(p.number)}
+                  disabled={busy}
+                  title={`Ir para "${p.name}"`}
+                  className="max-w-[110px] truncate px-2 py-1 text-xs text-zinc-200 hover:bg-emerald-500/15 hover:text-emerald-200 disabled:opacity-50"
+                >
+                  {p.name}
+                </button>
+                <button
+                  onClick={() => deletePreset(p.number)}
+                  disabled={busy}
+                  title="Apagar posição"
+                  className="px-1 py-1 text-zinc-500 hover:bg-red-500/15 hover:text-red-300 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <label className="mt-3 flex min-w-0 items-center gap-2 text-[11px] text-zinc-400">

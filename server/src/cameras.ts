@@ -27,9 +27,22 @@ export interface Camera {
   lensNames: { top: string; bottom: string };
   /** Detectado pela câmera (SystemFunction). null = ainda não verificado. */
   ptz: boolean | null;
+  /** Gravação contínua no computador (em arquivos de 10 min). */
+  recording: { continuous: boolean; quality: 'hd' | 'sd' };
+  /** Histórico de detecções (alarmes da câmera) e clipe de vídeo de cada uma. */
+  events: { enabled: boolean; clip: boolean };
   /** Calibração da mira (medida pelo navegador comparando imagens). */
   ptzCalibration: PtzCalibration | null;
+  /** Posições salvas do PTZ. O número é o preset gravado na câmera; o nome fica aqui. */
+  presets: CameraPreset[];
   model?: string;
+  createdAt: string;
+}
+
+export interface CameraPreset {
+  /** Número do preset na câmera (1–255). */
+  number: number;
+  name: string;
   createdAt: string;
 }
 
@@ -47,7 +60,7 @@ export interface PtzCalibration {
   updatedAt: string;
 }
 
-export type CameraInput = Omit<Camera, 'id' | 'createdAt' | 'ptz' | 'model' | 'ptzCalibration'> & {
+export type CameraInput = Omit<Camera, 'id' | 'createdAt' | 'ptz' | 'model' | 'ptzCalibration' | 'presets'> & {
   ptzCalibration?: PtzCalibration | null;
 };
 
@@ -160,6 +173,20 @@ export function validateInput(body: unknown, partial = false): { value?: Partial
     out.lensNames = { top: n.top.trim() || DEFAULT_LENS_NAMES.top, bottom: n.bottom.trim() || DEFAULT_LENS_NAMES.bottom };
   }
 
+  if (b.recording !== undefined) {
+    const r = b.recording as Record<string, unknown>;
+    if (typeof r !== 'object' || r === null || typeof r.continuous !== 'boolean' || (r.quality !== 'hd' && r.quality !== 'sd')) {
+      return { error: 'Configuração de gravação inválida' };
+    }
+    out.recording = { continuous: r.continuous, quality: r.quality };
+  }
+  if (b.events !== undefined) {
+    const e = b.events as Record<string, unknown>;
+    if (typeof e !== 'object' || e === null || typeof e.enabled !== 'boolean' || typeof e.clip !== 'boolean') {
+      return { error: 'Configuração de eventos inválida' };
+    }
+    out.events = { enabled: e.enabled, clip: e.clip };
+  }
   if (b.ptzCalibration !== undefined) {
     const c = b.ptzCalibration as Record<string, unknown> | null;
     if (c === null) {
@@ -199,6 +226,8 @@ export function validateInput(body: unknown, partial = false): { value?: Partial
     out.lenses ??= 'auto';
     out.ptzLens ??= 'bottom';
     out.lensNames ??= { ...DEFAULT_LENS_NAMES };
+    out.recording ??= { continuous: false, quality: 'sd' };
+    out.events ??= { enabled: true, clip: true };
   }
   return { value: out };
 }
@@ -224,6 +253,9 @@ function migrate(raw: Record<string, any>): Camera {
   cam.lensNames ??= { ...DEFAULT_LENS_NAMES };
   cam.ptz ??= null;
   cam.ptzCalibration ??= null;
+  cam.presets ??= [];
+  cam.recording ??= { continuous: false, quality: 'sd' };
+  cam.events ??= { enabled: true, clip: true };
   return cam as Camera;
 }
 
@@ -251,7 +283,7 @@ class CameraStore {
   }
 
   async add(input: CameraInput) {
-    const cam: Camera = { ptzCalibration: null, ...input, ptz: null, id: `cam_${randomBytes(3).toString('hex')}`, createdAt: new Date().toISOString() };
+    const cam: Camera = { ptzCalibration: null, presets: [], ...input, ptz: null, id: `cam_${randomBytes(3).toString('hex')}`, createdAt: new Date().toISOString() };
     this.cameras.push(cam);
     await this.save();
     return cam;

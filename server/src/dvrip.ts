@@ -18,6 +18,11 @@ export const MSG = {
   ABILITY_GET: 1360,
   PTZ: 1400,
   CHANNEL_TITLE_GET: 1048,
+  /** Assina os alarmes: depois disso a câmera empurra ALARM_INFO sozinha. */
+  ALARM_SET: 1500,
+  ALARM_INFO: 1504,
+  /** Foto (JPEG) direto da câmera. */
+  SNAPSHOT: 1560,
 } as const;
 
 export const RET_OK = new Set([100, 515]);
@@ -63,12 +68,27 @@ export interface DvripOptions {
 
 type Reply = Record<string, any> & { Ret?: number };
 
+export interface AlarmInfo {
+  Channel?: number;
+  /** Ex.: "VideoMotion", "HumanDetect", "VideoBlind", "VideoLoss"... */
+  Event?: string;
+  StartTime?: string;
+  /** "Start" | "Stop" */
+  Status?: string;
+  [key: string]: unknown;
+}
+
 export class DvripClient {
   private socket?: net.Socket;
   private session = 0;
   private seq = 0;
   private buffer = Buffer.alloc(0);
   private waiting?: { resolve: (r: Reply) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
+  private binary?: { resolve: (b: Buffer) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; parts: Buffer[]; remaining: number | null };
+  /** Chamado a cada alarme empurrado pela câmera (depois de subscribeAlarms). */
+  onAlarm?: (info: AlarmInfo) => void;
+  /** Chamado quando a conexão cai (para quem mantém uma sessão aberta). */
+  onClosed?: () => void;
   private queue: Promise<unknown> = Promise.resolve();
   private keepAliveTimer?: NodeJS.Timeout;
   closed = false;
@@ -151,6 +171,41 @@ export class DvripClient {
     return this.request(msgId, body);
   }
 
+  /** Passa a receber os alarmes da câmera em `onAlarm`. */
+  async subscribeAlarms() {
+    const reply = await this.request(MSG.ALARM_SET, { Name: '', SessionID: this.sessionHex });
+    if (!RET_OK.has(reply.Ret ?? 0)) throw new DvripError(`A câmera recusou a assinatura de alarmes (Ret ${reply.Ret})`, reply.Ret);
+  }
+
+  /** Foto JPEG do canal (0 = primeiro). */
+  snapshot(channel = 0, timeoutMs = 10_000): Promise<Buffer> {
+    const run = () =>
+      new Promise<Buffer>((resolve, reject) => {
+        if (!this.socket || this.closed) return reject(new DvripError('Conexão DVRIP fechada'));
+        const timer = setTimeout(() => {
+          this.binary = undefined;
+          reject(new DvripError('A câmera não enviou a foto'));
+        }, timeoutMs);
+        this.binary = { resolve, reject, timer, parts: [], remaining: null };
+        this.write(MSG.SNAPSHOT, { Name: 'OPSNAP', SessionID: this.sessionHex, OPSNAP: { Channel: channel } });
+      });
+    const p = this.queue.then(run, run);
+    this.queue = p.catch(() => {});
+    return p;
+  }
+
+  private write(msgId: number, body: object) {
+    const json = Buffer.from(JSON.stringify(body), 'utf8');
+    const header = Buffer.alloc(20);
+    header.writeUInt8(0xff, 0);
+    header.writeUInt8(0, 1);
+    header.writeUInt32LE(this.session, 4);
+    header.writeUInt32LE(this.seq++, 8);
+    header.writeUInt16LE(msgId, 14);
+    header.writeUInt32LE(json.length + 2, 16);
+    this.socket!.write(Buffer.concat([header, json, Buffer.from([0x0a, 0x00])]));
+  }
+
   close() {
     if (this.closed) return;
     this.closed = true;
@@ -159,8 +214,15 @@ export class DvripClient {
   }
 
   private onClose() {
+    const wasOpen = !this.closed;
     this.closed = true;
     clearInterval(this.keepAliveTimer);
+    if (this.binary) {
+      clearTimeout(this.binary.timer);
+      this.binary.reject(new DvripError('Conexão DVRIP encerrada pela câmera'));
+      this.binary = undefined;
+    }
+    if (wasOpen) this.onClosed?.();
     if (this.waiting) {
       clearTimeout(this.waiting.timer);
       this.waiting.reject(new DvripError('Conexão DVRIP encerrada pela câmera'));
@@ -168,13 +230,52 @@ export class DvripClient {
     }
   }
 
+  /**
+   * Resposta da foto: ou é um JPEG puro numa mensagem, ou vem com um
+   * cabeçalho de quadro 0x1FE (16 bytes, tamanho total no fim) e o resto
+   * do JPEG nas mensagens seguintes.
+   */
+  private onBinary(payload: Buffer) {
+    const b = this.binary!;
+    if (b.remaining === null) {
+      if (isJpeg(payload)) return this.finishBinary(payload);
+      if (payload.length >= 16 && payload.readUInt32BE(0) === 0x1fe) {
+        b.remaining = payload.readUInt32LE(12);
+        payload = payload.subarray(16);
+      } else {
+        // resposta JSON (erro) em vez da foto
+        const text = payload.toString('utf8').replace(/[\0\n\r]+$/g, '');
+        clearTimeout(b.timer);
+        this.binary = undefined;
+        b.reject(new DvripError(`A câmera não enviou a foto: ${text.slice(0, 120)}`));
+        return;
+      }
+    }
+    b.parts.push(payload);
+    b.remaining -= payload.length;
+    if (b.remaining <= 0) this.finishBinary(Buffer.concat(b.parts));
+  }
+
+  private finishBinary(data: Buffer) {
+    const b = this.binary!;
+    clearTimeout(b.timer);
+    this.binary = undefined;
+    b.resolve(data);
+  }
+
   private onData(chunk: Buffer) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
     while (this.buffer.length >= 20) {
       const len = this.buffer.readUInt32LE(16);
       if (this.buffer.length < 20 + len) return;
-      const payload = this.buffer.subarray(20, 20 + len);
+      const msgId = this.buffer.readUInt16LE(14);
+      const payload = Buffer.from(this.buffer.subarray(20, 20 + len));
       this.buffer = this.buffer.subarray(20 + len);
+
+      if (this.binary && msgId === MSG.SNAPSHOT + 1) {
+        this.onBinary(payload);
+        continue;
+      }
       const text = payload.toString('utf8').replace(/[\0\n\r]+$/g, '');
       let reply: Reply;
       try {
@@ -187,6 +288,12 @@ export class DvripClient {
           reply = { Ret: 101, raw: text };
         }
       }
+      // alarme empurrado pela câmera (não é resposta de nenhum pedido)
+      if (msgId === MSG.ALARM_INFO) {
+        const info = (reply.Name && reply[reply.Name]) || reply.AlarmInfo;
+        if (info && typeof info === 'object') this.onAlarm?.(info as AlarmInfo);
+        continue;
+      }
       const w = this.waiting;
       if (w) {
         this.waiting = undefined;
@@ -196,6 +303,9 @@ export class DvripClient {
     }
   }
 }
+
+const JPEG_MAGIC = [0xff, 0xd8, 0xff];
+const isJpeg = (b: Buffer) => b.length > 3 && JPEG_MAGIC.every((v, i) => b[i] === v);
 
 export const PTZ_COMMANDS = [
   'DirectionUp',

@@ -8,6 +8,7 @@ export default defineConfig({
     host: true, // acessível de outros dispositivos da rede (celular, TV...)
     proxy: {
       '/api': 'http://127.0.0.1:3001',
+      '/media': 'http://127.0.0.1:3001', // gravações e capturas
       // só os endpoints de vídeo do go2rtc (o resto da API dele expõe as senhas)
       '/go2rtc/api/ws': {
         target: 'http://127.0.0.1:1984',

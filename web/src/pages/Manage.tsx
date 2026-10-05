@@ -1,7 +1,7 @@
-import { ArrowDown, ArrowUp, Cctv, CircleHelp, Layers, Loader2, Move, Pencil, Plus, Radar, Trash2, Wifi, X } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, Cctv, CircleHelp, Clock, Cpu, Layers, Loader2, Move, Pencil, Plus, Radar, Tag, Trash2, Wifi, WifiOff, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { CameraForm } from '../components/CameraForm';
-import { api, type Camera, type CameraForm as Form, type FoundDevice } from '../lib/api';
+import { api, type Camera, type CameraForm as Form, type CameraHealth, type FoundDevice } from '../lib/api';
 
 interface Props {
   cameras: Camera[];
@@ -16,6 +16,7 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
   const [found, setFound] = useState<FoundDevice[] | 'scanning' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [healthOpen, setHealthOpen] = useState<string | null>(null);
 
   const scan = async () => {
     setFound('scanning');
@@ -156,6 +157,12 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
                         PTZ
                       </Badge>
                     )}
+                    {cam.recording?.continuous && (
+                      <Badge>
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                        Gravação contínua · {cam.recording.quality}
+                      </Badge>
+                    )}
                     {cam.channel !== 1 && <Badge>canal {cam.channel}</Badge>}
                   </div>
                 </div>
@@ -168,6 +175,15 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
                 <IconBtn disabled={i === cameras.length - 1} onClick={() => move(i, 1)} title="Mover para baixo">
                   <ArrowDown className="h-3.5 w-3.5" />
                 </IconBtn>
+                <button
+                  onClick={() => setHealthOpen((cur) => (cur === cam.id ? null : cam.id))}
+                  className={`ml-1 flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition ${
+                    healthOpen === cam.id ? 'bg-white/10 text-zinc-100' : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
+                  }`}
+                >
+                  <Activity className="h-3 w-3" />
+                  Saúde
+                </button>
                 <div className="ml-auto flex gap-1">
                   {confirmDelete === cam.id ? (
                     <>
@@ -199,6 +215,8 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
                   )}
                 </div>
               </div>
+
+              {healthOpen === cam.id && <HealthPanel cameraId={cam.id} online={reachable[cam.id]} />}
             </div>
           ))}
         </div>
@@ -218,6 +236,91 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
             }}
           />
         </Modal>
+      )}
+    </div>
+  );
+}
+
+function formatUptime(seconds?: number) {
+  if (!seconds || seconds < 0) return null;
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}min`;
+  return `${m}min`;
+}
+
+/** Saúde da câmera: carrega sob demanda ao abrir. */
+function HealthPanel({ cameraId, online }: { cameraId: string; online?: boolean }) {
+  const [health, setHealth] = useState<CameraHealth | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    api
+      .cameraHealth(cameraId)
+      .then(setHealth)
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, [cameraId]);
+
+  const uptime = formatUptime(health?.uptimeSeconds);
+  const rows: { icon: typeof Cpu; label: string; value: string }[] = [];
+  if (health?.online) {
+    if (health.firmware) rows.push({ icon: Cpu, label: 'Firmware', value: health.firmware });
+    if (health.buildTime) rows.push({ icon: Clock, label: 'Compilação', value: health.buildTime });
+    if (uptime) rows.push({ icon: Activity, label: 'Ligada há', value: uptime });
+    if (health.serial) rows.push({ icon: Tag, label: 'Nº de série', value: health.serial });
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/5 bg-black/20 p-3 text-xs">
+      <div className="mb-2 flex items-center gap-2">
+        {online === false ? (
+          <span className="flex items-center gap-1.5 font-medium text-red-300">
+            <WifiOff className="h-3.5 w-3.5" /> Offline na rede
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 font-medium text-emerald-300">
+            <Wifi className="h-3.5 w-3.5" /> Online
+          </span>
+        )}
+        {health?.online && health.wifiSignal != null && (
+          <span className="flex items-center gap-1 text-zinc-400">
+            <Wifi className="h-3.5 w-3.5" /> Sinal {health.wifiSignal}%
+          </span>
+        )}
+        <button onClick={load} disabled={loading} className="ml-auto rounded-md px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-white/5 hover:text-zinc-200 disabled:opacity-40">
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Atualizar'}
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-zinc-500">Consultando a câmera…</p>
+      ) : error ? (
+        <p className="text-red-300/90">{error}</p>
+      ) : health && !health.online ? (
+        <p className="text-amber-300/90">Não respondeu pelo controle (DVRIP){health.error ? `: ${health.error}` : ''}.</p>
+      ) : rows.length === 0 ? (
+        <p className="text-zinc-500">A câmera não informou detalhes de firmware.</p>
+      ) : (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+          {rows.map((r) => (
+            <div key={r.label} className="contents">
+              <dt className="flex items-center gap-1.5 text-zinc-500">
+                <r.icon className="h-3.5 w-3.5" />
+                {r.label}
+              </dt>
+              <dd className="truncate font-mono text-zinc-300" title={r.value}>
+                {r.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       )}
     </div>
   );

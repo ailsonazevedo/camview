@@ -1,26 +1,54 @@
-import { Activity, Cctv, Move, Server, Settings2, ShieldCheck, TriangleAlert, Video } from 'lucide-react';
+import { Activity, Bell, Cctv, Film, Move, Server, Settings2, ShieldCheck, SlidersHorizontal, TriangleAlert, Video } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type Camera, viewsOf } from './lib/api';
+import { EventToasts, type ToastItem } from './components/EventBits';
+import { api, type Camera, type CameraEvent, type Health, type RecordingStatus, viewsOf } from './lib/api';
+import { eventLabel, showSystemNotification, useEventStream } from './lib/events';
 import { Live } from './pages/Live';
+import { Events } from './pages/Events';
 import { Manage } from './pages/Manage';
+import { Recordings } from './pages/Recordings';
+import { Settings } from './pages/Settings';
 
-type Page = 'live' | 'manage';
+type Page = 'live' | 'manage' | 'recordings' | 'events' | 'settings';
 
-const pageFromHash = (): Page => (location.hash === '#/cameras' ? 'manage' : 'live');
+const HASHES: Record<Page, string> = { live: '#/', manage: '#/cameras', recordings: '#/gravacoes', events: '#/eventos', settings: '#/configuracoes' };
+
+const pageFromHash = (): Page =>
+  location.hash === '#/cameras'
+    ? 'manage'
+    : location.hash.startsWith('#/gravacoes')
+      ? 'recordings'
+      : location.hash.startsWith('#/eventos')
+        ? 'events'
+        : location.hash === '#/configuracoes'
+          ? 'settings'
+          : 'live';
+
+/** #/eventos/<id> abre o evento direto. */
+const eventFromHash = () => (location.hash.startsWith('#/eventos/') ? decodeURIComponent(location.hash.slice('#/eventos/'.length)) : null);
 
 export default function App() {
   const [page, setPage] = useState<Page>(pageFromHash);
   const [cameras, setCameras] = useState<Camera[] | null>(null);
   const [reachable, setReachable] = useState<Record<string, boolean>>({});
-  const [backend, setBackend] = useState<{ ok: boolean; go2rtc: boolean } | null>(null);
+  const [backend, setBackend] = useState<Health | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
 
-  const go = (p: Page) => {
-    location.hash = p === 'manage' ? '#/cameras' : '#/';
+  const [recStatus, setRecStatus] = useState<Record<string, RecordingStatus>>({});
+  const [openEventId, setOpenEventId] = useState<string | null>(eventFromHash);
+  const [unseen, setUnseen] = useState(0);
+  const [liveEvents, setLiveEvents] = useState<CameraEvent[]>([]);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  const go = (p: Page, sub?: string) => {
+    location.hash = HASHES[p] + (sub ? `/${sub}` : '');
   };
 
   useEffect(() => {
-    const onHash = () => setPage(pageFromHash());
+    const onHash = () => {
+      setPage(pageFromHash());
+      setOpenEventId(eventFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -37,6 +65,54 @@ export default function App() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // eventos em tempo real
+  const camerasRef = useRef<Camera[]>([]);
+  camerasRef.current = cameras ?? [];
+  const openEvent = useCallback((e: CameraEvent) => {
+    setFocusedKey(null);
+    location.hash = `#/eventos/${encodeURIComponent(e.id)}`;
+  }, []);
+  useEventStream((kind, event) => {
+    setLiveEvents((cur) => [event, ...cur.filter((e) => e.id !== event.id)].slice(0, 200));
+    if (kind === 'new') {
+      setUnseen((n) => n + 1);
+      const key = `${event.id}-${Date.now()}`;
+      setToasts((cur) => [{ event, key }, ...cur].slice(0, 4));
+      setTimeout(() => setToasts((cur) => cur.filter((t) => t.key !== key)), 10_000);
+      const cam = camerasRef.current.find((c) => c.id === event.cameraId);
+      showSystemNotification(eventLabel(event), `${cam?.name ?? event.cameraId} · ${new Date(event.start).toLocaleTimeString('pt-BR')}`, null, () => openEvent(event));
+    } else {
+      // a foto chega logo depois: atualiza a imagem do aviso
+      setToasts((cur) => cur.map((t) => (t.event.id === event.id ? { ...t, event } : t)));
+    }
+  });
+  useEffect(() => {
+    const tick = () => api.eventsSummary().then((s) => setUnseen(s.unseen)).catch(() => {});
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  // detecções acontecendo agora (destaque nos blocos ao vivo); redesenha
+  // logo depois que um alarme termina para tirar o destaque
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const ending = liveEvents.filter((e) => e.end && Date.now() - new Date(e.end).getTime() < 3000);
+    if (!ending.length) return;
+    const id = setTimeout(() => setTick((n) => n + 1), 3100);
+    return () => clearTimeout(id);
+  }, [liveEvents]);
+  const activeEvents = Object.fromEntries(
+    liveEvents.filter((e) => e.end === null || Date.now() - new Date(e.end).getTime() < 3000).map((e) => [e.cameraId, e]),
+  ) as Record<string, CameraEvent>;
+
+  // quais câmeras estão gravando (manual ou contínua)
+  useEffect(() => {
+    const tick = () => api.recordingStatus().then(setRecStatus).catch(() => {});
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   // saúde do backend/go2rtc + alcance das câmeras a cada 15s
   useEffect(() => {
@@ -78,8 +154,17 @@ export default function App() {
           <NavItem icon={Video} active={page === 'live'} onClick={() => go('live')}>
             Ao vivo
           </NavItem>
+          <NavItem icon={Bell} active={page === 'events'} onClick={() => go('events')} badge={unseen}>
+            Eventos
+          </NavItem>
+          <NavItem icon={Film} active={page === 'recordings'} onClick={() => go('recordings')}>
+            Gravações
+          </NavItem>
           <NavItem icon={Settings2} active={page === 'manage'} onClick={() => go('manage')}>
             Câmeras
+          </NavItem>
+          <NavItem icon={SlidersHorizontal} active={page === 'settings'} onClick={() => go('settings')}>
+            Configurações
           </NavItem>
         </nav>
 
@@ -94,6 +179,12 @@ export default function App() {
                   }`}
                 />
                 <span className="truncate text-[13px] font-medium">{cam.name}</span>
+                {recStatus[cam.id] && (
+                  <span className="flex items-center gap-1 text-[9px] font-bold tracking-wider text-red-400 uppercase" title="Gravando">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+                    Rec
+                  </span>
+                )}
                 <span className="ml-auto font-mono text-[10px] text-zinc-600">{cam.host.split('.').slice(-1)}</span>
               </div>
               <div className="mt-1 space-y-0.5">
@@ -138,8 +229,17 @@ export default function App() {
             <NavItem icon={Video} active={page === 'live'} onClick={() => go('live')} compact>
               Ao vivo
             </NavItem>
-            <NavItem icon={Settings2} active={page === 'manage'} onClick={() => go('manage')} compact>
+            <NavItem icon={Bell} active={page === 'events'} onClick={() => go('events')} compact badge={unseen}>
+            Eventos
+          </NavItem>
+          <NavItem icon={Film} active={page === 'recordings'} onClick={() => go('recordings')} compact>
+            Gravações
+          </NavItem>
+          <NavItem icon={Settings2} active={page === 'manage'} onClick={() => go('manage')} compact>
               Câmeras
+            </NavItem>
+            <NavItem icon={SlidersHorizontal} active={page === 'settings'} onClick={() => go('settings')} compact>
+              Configurações
             </NavItem>
           </nav>
           <div
@@ -159,6 +259,19 @@ export default function App() {
           </div>
         </header>
 
+        {backend?.media && !backend.media.available && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-red-500/20 bg-red-500/10 px-5 py-2 text-sm text-red-200">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            <span>
+              <b>Local de armazenamento indisponível</b> — gravações, capturas e eventos estão pausados. {backend.media.reason}
+            </span>
+            <span className="font-mono text-xs text-red-300/70">{backend.media.dir}</span>
+            <button onClick={() => go('recordings')} className="ml-auto rounded-md bg-white/10 px-2.5 py-1 text-xs font-semibold hover:bg-white/15">
+              Ver armazenamento
+            </button>
+          </div>
+        )}
+
         {backend && !systemOk && (
           <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-5 py-2 text-sm text-amber-200">
             <TriangleAlert className="h-4 w-4" />
@@ -168,8 +281,32 @@ export default function App() {
           </div>
         )}
 
+        <EventToasts
+          items={toasts}
+          cameras={cameras ?? []}
+          onOpen={(e) => {
+            setToasts((cur) => cur.filter((t) => t.event.id !== e.id));
+            openEvent(e);
+          }}
+          onDismiss={(key) => setToasts((cur) => cur.filter((t) => t.key !== key))}
+        />
+
         <main className="min-h-0 flex-1">
-          {cameras === null ? null : page === 'live' ? (
+          {cameras === null ? null : page === 'events' ? (
+            <Events
+              cameras={cameras}
+              live={liveEvents}
+              openId={openEventId}
+              onOpenChange={(id) => {
+                location.hash = id ? `#/eventos/${encodeURIComponent(id)}` : '#/eventos';
+              }}
+              onUnseenChange={setUnseen}
+            />
+          ) : page === 'settings' ? (
+            <Settings />
+          ) : page === 'recordings' ? (
+            <Recordings cameras={cameras} recStatus={recStatus} />
+          ) : page === 'live' ? (
             <Live
               cameras={cameras}
               reachable={reachable}
@@ -178,6 +315,13 @@ export default function App() {
               onDetectLenses={onDetectLenses}
               onCameraUpdated={refresh}
               onManage={() => go('manage')}
+              recStatus={recStatus}
+              activeEvents={activeEvents}
+              onRecChanged={setRecStatus}
+              onOpenGallery={() => {
+                setFocusedKey(null);
+                go('recordings', 'capturas');
+              }}
             />
           ) : (
             <Manage cameras={cameras} reachable={reachable} onChanged={refresh} />
@@ -208,9 +352,10 @@ function NavItem({
   icon: Icon,
   active,
   compact = false,
+  badge = 0,
   children,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: typeof Video; active: boolean; compact?: boolean }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: typeof Video; active: boolean; compact?: boolean; badge?: number }) {
   return (
     <button
       {...props}
@@ -219,7 +364,12 @@ function NavItem({
       }`}
     >
       <Icon className={`h-4 w-4 ${active ? 'text-emerald-400' : ''}`} />
-      {children}
+      <span className={compact ? 'max-sm:hidden' : ''}>{children}</span>
+      {badge > 0 && (
+        <span className="ml-auto min-w-[18px] rounded-full bg-orange-500 px-1.5 text-center text-[10px] leading-[18px] font-bold text-white tabular-nums">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </button>
   );
 }

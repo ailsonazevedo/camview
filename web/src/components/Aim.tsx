@@ -10,11 +10,15 @@ type Mode = 'center' | 'fixed' | null;
  * Mira por clique para a visualização aberta:
  *  - lente móvel (ou câmera PTZ de uma lente): clique centraliza o ponto;
  *  - lente fixa de uma câmera de duas lentes (experimental): clique aponta a móvel.
+ *
+ * Começa desligada: só responde a cliques (e só procura a lente móvel na
+ * imagem) depois que a pessoa ativa pelo botão "Mira".
  */
-export function useAim(view: View, getVideo: () => HTMLVideoElement | null, onCalibrated: () => void) {
+export function useAim(view: View, getVideo: () => HTMLVideoElement | null, onCalibrated: () => void, enabled: boolean) {
   const cam = view.camera;
   const dual = cam.lenses === 'dual';
-  const mode: Mode = cam.ptz !== true ? null : view.ptz ? 'center' : dual ? 'fixed' : null;
+  const available: Mode = cam.ptz !== true ? null : view.ptz ? 'center' : dual ? 'fixed' : null;
+  const mode: Mode = enabled ? available : null;
   const cal = cam.ptzCalibration;
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -159,5 +163,5 @@ export function useAim(view: View, getVideo: () => HTMLVideoElement | null, onCa
     </div>
   );
 
-  return { onPointClick: mode ? onPointClick : undefined, overlay, panel };
+  return { available: available !== null, onPointClick: mode ? onPointClick : undefined, overlay: mode ? overlay : null, panel };
 }

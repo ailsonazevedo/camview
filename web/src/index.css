@@ -55,6 +55,32 @@ camview-player {
   pointer-events: none;
 }
 
+@keyframes cv-flash {
+  from {
+    opacity: 0.7;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.cv-flash {
+  animation: cv-flash 0.45s ease-out forwards;
+}
+
+@keyframes cv-toast-in {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.cv-toast-in {
+  animation: cv-toast-in 0.25s ease-out;
+}
+
 /* Leve textura de "monitor" sobre os vídeos */
 .cv-scanlines::after {
   content: '';
