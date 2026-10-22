@@ -33,9 +33,11 @@ export interface Settings {
   mediaDir: string | null;
   /** Chave geral das detecções: desligada, nenhuma câmera registra eventos. */
   detectionsEnabled: boolean;
+  /** Reencontrar sozinho, na rede, as câmeras que mudarem de IP (ex.: depois de queda de energia). */
+  autoRelocate: boolean;
 }
 
-const DEFAULT_SETTINGS: Settings = { retentionGB: 20, eventsDays: 30, mediaDir: null, detectionsEnabled: true };
+const DEFAULT_SETTINGS: Settings = { retentionGB: 20, eventsDays: 30, mediaDir: null, detectionsEnabled: true, autoRelocate: true };
 let settings: Settings = { ...DEFAULT_SETTINGS };
 
 export async function loadSettings() {

@@ -1,7 +1,29 @@
-import { Activity, ArrowDown, ArrowUp, Cctv, CircleHelp, Clock, Cpu, Layers, Loader2, Move, Pencil, Plus, Radar, Tag, Trash2, Wifi, WifiOff, X } from 'lucide-react';
+import {
+  Activity,
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Cctv,
+  CircleHelp,
+  Clock,
+  Cpu,
+  Layers,
+  Loader2,
+  Move,
+  Network,
+  Pencil,
+  Plus,
+  Radar,
+  RefreshCw,
+  Tag,
+  Trash2,
+  Wifi,
+  WifiOff,
+  X,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { CameraForm } from '../components/CameraForm';
-import { api, type Camera, type CameraForm as Form, type CameraHealth, type FoundDevice } from '../lib/api';
+import { api, type Camera, type CameraForm as Form, type CameraHealth, type FoundDevice, type RelocateResult } from '../lib/api';
 
 interface Props {
   cameras: Camera[];
@@ -17,6 +39,46 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [healthOpen, setHealthOpen] = useState<string | null>(null);
+  const [relocation, setRelocation] = useState<RelocateResult | 'searching' | null>(null);
+  const [choosing, setChoosing] = useState<string | null>(null);
+  const offline = cameras.filter((c) => reachable[c.id] === false).length;
+
+  const relocate = async () => {
+    setRelocation('searching');
+    setError(null);
+    try {
+      const result = await api.relocate();
+      setRelocation(result);
+      if (result.moved.length > 0) onChanged();
+    } catch (err) {
+      setRelocation(null);
+      setError((err as Error).message);
+    }
+  };
+
+  /** Escolha manual: "a câmera X é este IP". */
+  const chooseHost = async (cameraId: string, host: string) => {
+    setChoosing(`${cameraId}@${host}`);
+    try {
+      const cam = await api.relocateTo(cameraId, host);
+      setRelocation((cur) =>
+        cur && cur !== 'searching'
+          ? {
+              ...cur,
+              moved: [...cur.moved, { id: cam.id, name: cam.name, from: cam.lastRelocation?.from ?? '', to: host, by: 'manual' }],
+              unresolved: cur.unresolved
+                .filter((u) => u.id !== cameraId)
+                .map((u) => ({ ...u, candidates: u.candidates.filter((c) => c.host !== host) })),
+            }
+          : cur,
+      );
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setChoosing(null);
+    }
+  };
 
   const scan = async () => {
     setFound('scanning');
@@ -57,7 +119,18 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
           <h2 className="text-lg font-semibold tracking-tight">Câmeras</h2>
           <p className="text-sm text-zinc-500">Cadastre, teste e organize os dispositivos.</p>
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap gap-2">
+          <button
+            onClick={relocate}
+            disabled={relocation === 'searching' || cameras.length === 0}
+            title="Procura na rede as câmeras que mudaram de IP e reconecta"
+            className={`flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium transition disabled:opacity-60 ${
+              offline > 0 ? 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/15' : 'border-white/10 hover:bg-white/5'
+            }`}
+          >
+            <RefreshCw className={`h-4 w-4 ${relocation === 'searching' ? 'animate-spin' : ''}`} />
+            {relocation === 'searching' ? 'Reconectando…' : offline > 0 ? `Reconectar câmeras (${offline} offline)` : 'Reconectar câmeras'}
+          </button>
           <button
             onClick={scan}
             disabled={found === 'scanning'}
@@ -83,6 +156,73 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
             <X className="h-4 w-4" />
           </button>
         </div>
+      )}
+
+      {relocation && relocation !== 'searching' && (
+        <section className="rounded-xl border border-amber-500/20 bg-amber-500/[0.03] p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Network className="h-4 w-4 text-amber-300" />
+            <h3 className="text-sm font-semibold">Reconectar câmeras</h3>
+            <button onClick={() => setRelocation(null)} className="ml-auto text-zinc-500 hover:text-zinc-300">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {relocation.missing === 0 ? (
+            <p className="text-sm text-zinc-400">Todas as câmeras estão respondendo no IP cadastrado.</p>
+          ) : (
+            <div className="space-y-3 text-sm">
+              {relocation.moved.map((m) => (
+                <div key={m.id} className="flex flex-wrap items-center gap-2 text-emerald-300">
+                  <Wifi className="h-4 w-4" />
+                  <b>{m.name}</b>
+                  <span className="flex items-center gap-1 font-mono text-xs text-zinc-400">
+                    {m.from} <ArrowRight className="h-3 w-3" /> {m.to}
+                  </span>
+                  <span className="text-xs text-zinc-500">reconectada</span>
+                </div>
+              ))}
+              {relocation.unresolved.map((u) => (
+                <div key={u.id} className="rounded-lg border border-white/5 bg-black/30 p-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <WifiOff className="h-4 w-4 text-red-400" />
+                    <b>{u.name}</b>
+                    <span className="text-xs text-zinc-500">não foi reconhecida automaticamente</span>
+                  </div>
+                  {u.candidates.length === 0 ? (
+                    <p className="text-xs text-zinc-400">
+                      Nenhum aparelho livre encontrado na rede. Confira se a câmera está ligada e conectada ao Wi‑Fi.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="mb-2 text-xs text-zinc-400">Qual destes aparelhos é ela?</p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {u.candidates.map((c) => (
+                          <div key={c.host} className="flex items-center gap-3 rounded-md border border-white/5 px-3 py-2">
+                            <Cctv className="h-4 w-4 shrink-0 text-zinc-500" />
+                            <div className="min-w-0">
+                              <div className="font-mono text-xs">{c.host}</div>
+                              <div className="truncate text-[11px] text-zinc-500">
+                                {[c.name, c.model, c.loginOk ? 'senha confere' : c.loginOk === false ? 'senha não confere' : null].filter(Boolean).join(' · ') ||
+                                  'aparelho na rede'}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => chooseHost(u.id, c.host)}
+                              disabled={choosing !== null}
+                              className="ml-auto flex items-center gap-1 rounded-md bg-white/10 px-2.5 py-1 text-xs font-medium hover:bg-white/15 disabled:opacity-50"
+                            >
+                              {choosing === `${u.id}@${c.host}` && <Loader2 className="h-3 w-3 animate-spin" />}É esta
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
 
       {Array.isArray(found) && (
@@ -164,6 +304,12 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
                       </Badge>
                     )}
                     {cam.channel !== 1 && <Badge>canal {cam.channel}</Badge>}
+                    {cam.lastRelocation && Date.now() - Date.parse(cam.lastRelocation.at) < 24 * 3600_000 && (
+                      <Badge>
+                        <RefreshCw className="h-3 w-3" />
+                        IP atualizado · antes {cam.lastRelocation.from}
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
@@ -216,7 +362,7 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
                 </div>
               </div>
 
-              {healthOpen === cam.id && <HealthPanel cameraId={cam.id} online={reachable[cam.id]} />}
+              {healthOpen === cam.id && <HealthPanel cameraId={cam.id} mac={cam.mac} online={reachable[cam.id]} />}
             </div>
           ))}
         </div>
@@ -252,7 +398,7 @@ function formatUptime(seconds?: number) {
 }
 
 /** Saúde da câmera: carrega sob demanda ao abrir. */
-function HealthPanel({ cameraId, online }: { cameraId: string; online?: boolean }) {
+function HealthPanel({ cameraId, mac, online }: { cameraId: string; mac?: string; online?: boolean }) {
   const [health, setHealth] = useState<CameraHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -275,6 +421,7 @@ function HealthPanel({ cameraId, online }: { cameraId: string; online?: boolean 
     if (health.buildTime) rows.push({ icon: Clock, label: 'Compilação', value: health.buildTime });
     if (uptime) rows.push({ icon: Activity, label: 'Ligada há', value: uptime });
     if (health.serial) rows.push({ icon: Tag, label: 'Nº de série', value: health.serial });
+    if (mac) rows.push({ icon: Network, label: 'MAC', value: mac });
   }
 
   return (
@@ -376,7 +523,7 @@ function Help() {
       <ol className="mt-3 list-decimal space-y-2 pl-5">
         <li>O computador precisa estar na mesma rede (Wi‑Fi/cabo) que as câmeras.</li>
         <li>
-          <b className="text-zinc-300">Descubra o IP</b> com “Procurar na rede”. Vale fixar o IP de cada câmera no roteador (reserva DHCP).
+          <b className="text-zinc-300">Descubra o IP</b> com “Procurar na rede”. Vale fixar o IP de cada câmera no roteador (reserva DHCP); se o IP mudar mesmo assim, use “Reconectar câmeras”.
         </li>
         <li>
           <b className="text-zinc-300">Usuário e senha do dispositivo</b>: no ICSee, abra a câmera → ⚙ → <i>Senha do dispositivo</i> / <i>Alterar senha</i>. É a

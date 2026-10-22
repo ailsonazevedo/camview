@@ -36,7 +36,23 @@ export interface Camera {
   /** Posições salvas do PTZ. O número é o preset gravado na câmera; o nome fica aqui. */
   presets: CameraPreset[];
   model?: string;
+  /** Identidade estável (não muda com o IP): usada para reencontrar a câmera quando o DHCP troca o IP. */
+  serial?: string;
+  mac?: string;
+  /** Nome que a câmera anuncia no broadcast XMeye (HostName). */
+  hostName?: string;
+  /** Última troca de IP detectada/aplicada. */
+  lastRelocation?: Relocation;
   createdAt: string;
+}
+
+export type RelocationReason = 'serial' | 'mac' | 'hostName' | 'login' | 'manual';
+
+export interface Relocation {
+  from: string;
+  to: string;
+  at: string;
+  by: RelocationReason;
 }
 
 export interface CameraPreset {
@@ -60,7 +76,10 @@ export interface PtzCalibration {
   updatedAt: string;
 }
 
-export type CameraInput = Omit<Camera, 'id' | 'createdAt' | 'ptz' | 'model' | 'ptzCalibration' | 'presets'> & {
+export type CameraInput = Omit<
+  Camera,
+  'id' | 'createdAt' | 'ptz' | 'model' | 'ptzCalibration' | 'presets' | 'serial' | 'mac' | 'hostName' | 'lastRelocation'
+> & {
   ptzCalibration?: PtzCalibration | null;
 };
 

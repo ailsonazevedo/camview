@@ -3,14 +3,15 @@ import path from 'node:path';
 import fastifyProxy from '@fastify/http-proxy';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
-import { type Camera, type CameraInput, type Protocol, store, toPublic, validateInput } from './cameras.js';
+import { type Camera, type CameraInput, type Protocol, type RelocationReason, store, toPublic, validateInput } from './cameras.js';
 import * as control from './control.js';
 import { DvripError } from './dvrip.js';
-import { discover, reachable } from './discover.js';
+import { discover, normalizeMac, reachable } from './discover.js';
 import { type EventType, events } from './events.js';
 import * as go2rtc from './go2rtc.js';
 import * as media from './media.js';
 import { recordings } from './recorder.js';
+import { createRelocator, startWatcher } from './relocate.js';
 import * as location from './storage-location.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -36,9 +37,34 @@ app.get('/api/cameras', async () => store.list().map(toPublic));
 function refreshDeviceInfo(cam: Camera) {
   control
     .readDeviceInfo(cam)
-    .then((info) => store.update(cam.id, info))
+    .then((info) => {
+      // outro aparelho respondeu nesse IP (IPs trocados): não troca a identidade salva
+      if (cam.serial && info.serial && info.serial !== cam.serial) {
+        app.log.warn({ camera: cam.name, host: cam.host }, 'o IP da câmera responde com outro número de série');
+        return;
+      }
+      return store.update(cam.id, info);
+    })
     .catch((err) => app.log.warn({ host: cam.host, err: (err as Error).message }, 'não foi possível ler recursos via DVRIP'));
 }
+
+/** Depois de mudar IP/porta/credenciais: reconecta vídeo, PTZ, gravação e eventos. */
+async function applyConnectionChange(cam: Camera) {
+  control.closeSession(cam.id);
+  await go2rtc.syncCamera(cam).catch((err) => app.log.warn({ err }, 'falha ao registrar no go2rtc'));
+  refreshDeviceInfo(cam);
+  recordings.restart(cam);
+  events.restart(cam);
+}
+
+async function moveCamera(cam: Camera, host: string, by: RelocationReason, identity: Partial<Pick<Camera, 'serial' | 'mac' | 'hostName'>> = {}) {
+  const lastRelocation = { from: cam.host, to: host, at: new Date().toISOString(), by };
+  const updated = (await store.update(cam.id, { ...identity, host, lastRelocation }))!;
+  await applyConnectionChange(updated);
+  return updated;
+}
+
+const relocator = createRelocator({ log: app.log, move: (cam, host, by, identity) => moveCamera(cam, host, by, identity).then(() => {}) });
 
 app.post('/api/cameras', async (req, reply) => {
   const { value, error } = validateInput(req.body);
@@ -63,11 +89,7 @@ app.put<{ Params: { id: string } }>('/api/cameras/:id', async (req, reply) => {
   );
   const updated = (await store.update(cam.id, value!))!;
   if (connectionChanged) {
-    control.closeSession(cam.id);
-    await go2rtc.syncCamera(updated).catch((err) => req.log.warn({ err }, 'falha ao registrar no go2rtc'));
-    refreshDeviceInfo(updated);
-    recordings.restart(updated);
-    events.restart(updated);
+    await applyConnectionChange(updated);
   } else {
     if (value!.recording) recordings.applyContinuous(updated);
     if (value!.events) events.apply(updated);
@@ -151,6 +173,27 @@ app.get('/api/cameras/status', async () => {
     store.list().map(async (c) => [c.id, await reachable(c.host, c.protocol === 'rtsp' ? c.rtspPort : c.dvripPort)] as const),
   );
   return Object.fromEntries(entries);
+});
+
+/** Procura na rede as câmeras que saíram do IP cadastrado e reconecta as que forem reconhecidas. */
+app.post('/api/cameras/relocate', async () => {
+  const result = await relocator.relocate({ auto: false });
+  return { ...result, cameras: store.list().map(toPublic) };
+});
+
+/** Escolha manual entre os candidatos: { host }. */
+app.post<{ Params: { id: string }; Body: { host?: unknown } }>('/api/cameras/:id/relocate', async (req, reply) => {
+  const cam = store.get(req.params.id);
+  if (!cam) return reply.code(404).send({ error: 'Câmera não encontrada' });
+  const { value, error } = validateInput({ host: req.body?.host }, true);
+  if (error || !value?.host) return reply.code(400).send({ error: error ?? 'Informe o IP' });
+  if (store.list().some((c) => c.id !== cam.id && c.host === value.host)) {
+    return reply.code(409).send({ error: 'Esse IP já é de outra câmera cadastrada' });
+  }
+  if (value.host === cam.host) return toPublic(cam);
+  const updated = await moveCamera(cam, value.host, 'manual');
+  req.log.info({ camera: cam.name, from: cam.host, to: value.host }, 'relocate: IP trocado manualmente');
+  return toPublic(updated);
 });
 
 /**
@@ -248,7 +291,10 @@ app.get<{ Params: { id: string } }>('/api/cameras/:id/health', async (req, reply
   if (!cam) return reply.code(404).send({ error: 'Câmera não encontrada' });
   try {
     const health = await control.readHealth(cam);
-    if (health.model && health.model !== cam.model) await store.update(cam.id, { model: health.model });
+    const patch: Partial<Camera> = {};
+    if (health.model && health.model !== cam.model) patch.model = health.model;
+    if (health.serial && health.serial !== cam.serial) patch.serial = health.serial;
+    if (Object.keys(patch).length) await store.update(cam.id, patch);
     return { online: true, ...health };
   } catch (err) {
     const e = err as DvripError;
@@ -257,9 +303,16 @@ app.get<{ Params: { id: string } }>('/api/cameras/:id/health', async (req, reply
 });
 
 app.get('/api/discover', async () => {
-  const known = new Set(store.list().map((c) => c.host));
+  const cams = store.list();
+  const hosts = new Set(cams.map((c) => c.host));
+  const serials = new Set(cams.map((c) => c.serial).filter(Boolean));
+  const macs = new Set(cams.map((c) => normalizeMac(c.mac)).filter(Boolean));
   const devices = await discover();
-  return devices.map((d) => ({ ...d, added: known.has(d.host) }));
+  return devices.map((d) => ({
+    ...d,
+    // câmera que mudou de IP continua sendo "já adicionada"
+    added: hosts.has(d.host) || (d.serial !== undefined && serials.has(d.serial)) || macs.has(normalizeMac(d.mac)),
+  }));
 });
 
 app.get('/api/health', async () => {
@@ -333,7 +386,7 @@ app.get('/api/storage', async () => ({
 
 app.get('/api/settings', async () => media.getSettings());
 
-app.put<{ Body: { retentionGB?: unknown; eventsDays?: unknown; detectionsEnabled?: unknown } }>('/api/settings', async (req, reply) => {
+app.put<{ Body: { retentionGB?: unknown; eventsDays?: unknown; detectionsEnabled?: unknown; autoRelocate?: unknown } }>('/api/settings', async (req, reply) => {
   const patch: Partial<media.Settings> = {};
   if (req.body?.retentionGB !== undefined) {
     const gb = Number(req.body.retentionGB);
@@ -348,6 +401,10 @@ app.put<{ Body: { retentionGB?: unknown; eventsDays?: unknown; detectionsEnabled
   if (req.body?.detectionsEnabled !== undefined) {
     if (typeof req.body.detectionsEnabled !== 'boolean') return reply.code(400).send({ error: 'detectionsEnabled deve ser true ou false' });
     patch.detectionsEnabled = req.body.detectionsEnabled;
+  }
+  if (req.body?.autoRelocate !== undefined) {
+    if (typeof req.body.autoRelocate !== 'boolean') return reply.code(400).send({ error: 'autoRelocate deve ser true ou false' });
+    patch.autoRelocate = req.body.autoRelocate;
   }
   const saved = await media.saveSettings(patch);
   if (patch.detectionsEnabled !== undefined) {
@@ -494,13 +551,14 @@ await app.listen({ port: PORT, host: HOST });
         await go2rtc.syncAll(store.list());
         app.log.info(`go2rtc sincronizado com ${store.list().length} câmera(s)`);
         for (const cam of store.list()) {
-          if (cam.ptz === null) refreshDeviceInfo(cam);
+          if (cam.ptz === null || !cam.serial) refreshDeviceInfo(cam);
           recordings.applyContinuous(cam);
           events.apply(cam);
         }
       } catch (err) {
         app.log.error({ err }, 'falha ao sincronizar com go2rtc');
       }
+      startWatcher({ enabled: () => media.getSettings().autoRelocate, relocate: () => relocator.relocate({ auto: true }), log: app.log });
       return;
     }
     await new Promise((r) => setTimeout(r, 1000));

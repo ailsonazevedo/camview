@@ -81,16 +81,28 @@ export async function ptz(
 export interface DeviceInfo {
   ptz: boolean;
   model?: string;
+  serial?: string;
+  hostName?: string;
 }
 
-/** Lê modelo e recursos (PTZ) da câmera via DVRIP. */
+/**
+ * Lê modelo, recursos (PTZ) e identidade (série/HostName) da câmera via DVRIP.
+ * O MAC vem só do broadcast: pelo DVRIP alguns firmwares mandam um genérico (00:12:34:…).
+ */
 export async function readDeviceInfo(cam: Camera): Promise<DeviceInfo> {
   return withClient(cam, async (c) => {
     const info = await c.command(MSG.SYSTEM_INFO, 'SystemInfo');
     const abilities = await c.command(MSG.ABILITY_GET, 'SystemFunction');
     const other = abilities.SystemFunction?.OtherFunction ?? {};
     const ptz = Boolean(other.SupportPTZDirectionControl || other.SupportPTZTour);
-    return { ptz, model: info.SystemInfo?.HardWare };
+    const out: DeviceInfo = { ptz, model: info.SystemInfo?.HardWare };
+    if (info.SystemInfo?.SerialNo) out.serial = String(info.SystemInfo.SerialNo);
+    try {
+      const net = await c.command(MSG.CONFIG_GET, 'NetWork.NetCommon');
+      const common = net['NetWork.NetCommon'] ?? net.NetWork?.NetCommon;
+      if (common?.HostName) out.hostName = String(common.HostName);
+    } catch {}
+    return out;
   });
 }
 

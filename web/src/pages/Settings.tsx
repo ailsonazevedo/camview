@@ -1,4 +1,4 @@
-import { Bell, Loader2 } from 'lucide-react';
+import { Bell, Loader2, Network } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 import { api, type Settings as SettingsData } from '../lib/api';
 
@@ -40,19 +40,34 @@ export function Settings() {
       {settings === null ? (
         !error && <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
       ) : (
-        <Group icon={Bell} title="Detecções">
-          <SwitchRow
-            label="Registrar detecções"
-            hint={
-              settings.detectionsEnabled
-                ? 'As câmeras com histórico ligado no cadastro registram cada alarme (pessoa, movimento) com foto e, se configurado, um clipe de vídeo.'
-                : 'Desligado: nenhuma câmera registra eventos, fotos ou clipes de detecção. O histórico existente continua disponível em Eventos.'
-            }
-            checked={settings.detectionsEnabled}
-            busy={saving === 'detectionsEnabled'}
-            onChange={(v) => save('detectionsEnabled', v)}
-          />
-        </Group>
+        <>
+          <Group icon={Bell} title="Detecções">
+            <SwitchRow
+              label="Registrar detecções"
+              hint={
+                settings.detectionsEnabled
+                  ? 'As câmeras com histórico ligado no cadastro registram cada alarme (pessoa, movimento) com foto e, se configurado, um clipe de vídeo.'
+                  : 'Desligado: nenhuma câmera registra eventos, fotos ou clipes de detecção. O histórico existente continua disponível em Eventos.'
+              }
+              checked={settings.detectionsEnabled}
+              busy={saving === 'detectionsEnabled'}
+              onChange={(v) => save('detectionsEnabled', v)}
+            />
+          </Group>
+          <Group icon={Network} title="Rede">
+            <SwitchRow
+              label="Reencontrar câmeras que mudarem de IP"
+              hint={
+                settings.autoRelocate
+                  ? 'Se uma câmera parar de responder no IP cadastrado (ex.: o roteador trocou o IP depois de uma queda de energia), o CamView procura por ela na rede pelo número de série e reconecta sozinho.'
+                  : 'Desligado: quando o IP mudar, use “Reconectar câmeras” na aba Câmeras.'
+              }
+              checked={settings.autoRelocate}
+              busy={saving === 'autoRelocate'}
+              onChange={(v) => save('autoRelocate', v)}
+            />
+          </Group>
+        </>
       )}
     </div>
   );

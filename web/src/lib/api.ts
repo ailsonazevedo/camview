@@ -21,8 +21,29 @@ export interface Camera {
   recording: RecordingSettings;
   events: EventSettings;
   model?: string;
+  serial?: string;
+  mac?: string;
+  hostName?: string;
+  /** Última troca de IP (detectada sozinha ou escolhida na mão). */
+  lastRelocation?: { from: string; to: string; at: string; by: 'serial' | 'mac' | 'hostName' | 'login' | 'manual' };
   createdAt: string;
   streams: { hd: string; sd: string; talk: string };
+}
+
+export interface RelocateCandidate {
+  host: string;
+  name?: string;
+  model?: string;
+  serial?: string;
+  loginOk?: boolean;
+}
+
+/** Resultado de "Reconectar câmeras" (POST /api/cameras/relocate). */
+export interface RelocateResult {
+  moved: { id: string; name: string; from: string; to: string; by: string }[];
+  unresolved: { id: string; name: string; candidates: RelocateCandidate[] }[];
+  missing: number;
+  cameras: Camera[];
 }
 
 export interface CameraPreset {
@@ -100,6 +121,8 @@ export interface Settings {
   mediaDir: string | null;
   /** Chave geral: desligada, nenhuma câmera registra eventos. */
   detectionsEnabled: boolean;
+  /** Reencontrar sozinho as câmeras que mudarem de IP. */
+  autoRelocate: boolean;
 }
 
 export interface Storage {
@@ -184,6 +207,7 @@ export interface FoundDevice {
   ports: number[];
   name?: string;
   serial?: string;
+  mac?: string;
   xmeye: boolean;
   added: boolean;
 }
@@ -223,6 +247,8 @@ export const api = {
   test: (form: CameraForm & { id?: string }) => request<TestResult>('POST', '/api/cameras/test', form),
   status: () => request<Record<string, boolean>>('GET', '/api/cameras/status'),
   discover: () => request<FoundDevice[]>('GET', '/api/discover'),
+  relocate: () => request<RelocateResult>('POST', '/api/cameras/relocate'),
+  relocateTo: (id: string, host: string) => request<Camera>('POST', `/api/cameras/${id}/relocate`, { host }),
   health: () => request<Health>('GET', '/api/health'),
   storageLocation: () => request<StorageLocation>('GET', '/api/storage/location'),
   storageSuggestions: () => request<{ label: string; dir: string; freeBytes?: number }[]>('GET', '/api/storage/suggestions'),

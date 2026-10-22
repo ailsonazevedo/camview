@@ -8,6 +8,7 @@ export interface FoundDevice {
   ports: number[];
   name?: string;
   serial?: string;
+  mac?: string;
   /** Respondeu ao broadcast de descoberta XMeye — é quase certamente uma câmera ICSee. */
   xmeye: boolean;
 }
@@ -67,7 +68,7 @@ function parseXmeyeIp(hex: string) {
  * Broadcast UDP de descoberta usado pelo CMS/VMS da XiongMai (porta 34569).
  * Cada câmera responde com um JSON contendo IP, nome e número de série.
  */
-function xmeyeBroadcast(timeoutMs = 2500) {
+export function xmeyeBroadcast(timeoutMs = 2500) {
   return new Promise<FoundDevice[]>((resolve) => {
     const found = new Map<string, FoundDevice>();
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
@@ -91,6 +92,7 @@ function xmeyeBroadcast(timeoutMs = 2500) {
           ports: info.TCPPort ? [info.TCPPort] : [34567],
           name: info.HostName,
           serial: info.SN,
+          mac: info.MAC,
           xmeye: true,
         });
       } catch {}
@@ -102,6 +104,12 @@ function xmeyeBroadcast(timeoutMs = 2500) {
       setTimeout(finish, timeoutMs);
     });
   });
+}
+
+/** Compara MACs ignorando caixa e separadores ("AA:BB-cc" = "aabbcc"). */
+export function normalizeMac(mac: string | undefined) {
+  const m = mac?.toLowerCase().replace(/[^0-9a-f]/g, '');
+  return m && m.length === 12 && m !== '000000000000' ? m : undefined;
 }
 
 export async function discover(): Promise<FoundDevice[]> {
