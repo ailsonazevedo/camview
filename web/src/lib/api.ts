@@ -2,8 +2,16 @@ export type Protocol = 'dvrip' | 'rtsp';
 export type Lenses = 'auto' | 'single' | 'dual';
 export type LensPosition = 'top' | 'bottom';
 
+/** Local com um conjunto de câmeras; o seletor do cabeçalho filtra o painel por casa. */
+export interface Home {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
 export interface Camera {
   id: string;
+  homeId: string;
   name: string;
   host: string;
   username: string;
@@ -178,6 +186,7 @@ export interface PtzCalibration {
 }
 
 export interface CameraForm {
+  homeId: string;
   name: string;
   host: string;
   username: string;
@@ -238,7 +247,15 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   return data as T;
 }
 
+/** Monta a query string sem os campos vazios. */
+const qs = (params: Record<string, string | number | undefined>) =>
+  new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '') as [string, string][]).toString();
+
 export const api = {
+  homes: () => request<Home[]>('GET', '/api/homes'),
+  createHome: (name: string) => request<Home>('POST', '/api/homes', { name }),
+  renameHome: (id: string, name: string) => request<Home>('PUT', `/api/homes/${id}`, { name }),
+  deleteHome: (id: string) => request<void>('DELETE', `/api/homes/${id}`),
   list: () => request<Camera[]>('GET', '/api/cameras'),
   create: (form: CameraForm) => request<Camera>('POST', '/api/cameras', form),
   update: (id: string, form: Partial<CameraForm> & { ptzCalibration?: PtzCalibration | null }) => request<Camera>('PUT', `/api/cameras/${id}`, form),
@@ -256,10 +273,9 @@ export const api = {
   record: (id: string, action: 'start' | 'stop', quality?: 'hd' | 'sd') =>
     request<Record<string, RecordingStatus>>('POST', `/api/cameras/${id}/record`, { action, quality }),
   recordingStatus: () => request<Record<string, RecordingStatus>>('GET', '/api/recordings/status'),
-  recordings: (filter: { camera?: string; date?: string } = {}) =>
-    request<RecordingFile[]>('GET', `/api/recordings?${new URLSearchParams(filter as Record<string, string>)}`),
-  recordingDates: () => request<string[]>('GET', '/api/recordings/dates'),
-  captures: (camera?: string) => request<CaptureFile[]>('GET', `/api/captures${camera ? `?camera=${camera}` : ''}`),
+  recordings: (filter: { camera?: string; home?: string; date?: string } = {}) => request<RecordingFile[]>('GET', `/api/recordings?${qs(filter)}`),
+  recordingDates: (home?: string) => request<string[]>('GET', `/api/recordings/dates?${qs({ home })}`),
+  captures: (filter: { camera?: string; home?: string } = {}) => request<CaptureFile[]>('GET', `/api/captures?${qs(filter)}`),
   uploadCapture: async (camera: string, lens: string, jpeg: Blob) => {
     const res = await fetch(`/api/captures?camera=${encodeURIComponent(camera)}&lens=${lens}`, {
       method: 'POST',
@@ -274,14 +290,16 @@ export const api = {
   storage: () => request<Storage>('GET', '/api/storage'),
   settings: () => request<Settings>('GET', '/api/settings'),
   saveSettings: (patch: Partial<Omit<Settings, 'mediaDir'>>) => request<Settings>('PUT', '/api/settings', patch),
-  events: (filter: { camera?: string; type?: string; date?: string; before?: string; limit?: number } = {}) =>
-    request<CameraEvent[]>(
+  events: (filter: { camera?: string; home?: string; type?: string; date?: string; before?: string; limit?: number } = {}) =>
+    request<CameraEvent[]>('GET', `/api/events?${qs(filter)}`),
+  /** `home` limita o contador de não vistos às câmeras da casa. */
+  eventsSummary: (home?: string) =>
+    request<{ enabled: boolean; unseen: number; cameras: Record<string, { connected: boolean; error?: string; active: boolean }> }>(
       'GET',
-      `/api/events?${new URLSearchParams(Object.entries(filter).filter(([, v]) => v !== undefined && v !== '') as [string, string][])}`,
+      `/api/events/summary?${qs({ home })}`,
     ),
-  eventsSummary: () =>
-    request<{ enabled: boolean; unseen: number; cameras: Record<string, { connected: boolean; error?: string; active: boolean }> }>('GET', '/api/events/summary'),
-  markSeen: (ids: string[] | 'all') => request<{ unseen: number }>('POST', '/api/events/seen', ids === 'all' ? { all: true } : { ids }),
+  markSeen: (ids: string[] | 'all', home?: string) =>
+    request<{ unseen: number }>('POST', '/api/events/seen', ids === 'all' ? { all: true, home } : { ids, home }),
   deleteEvents: (ids: string[]) => request<{ removed: number }>('DELETE', '/api/events', { ids }),
   ptz: (id: string, body: { command: PtzCommand; action?: 'start' | 'stop' | 'pulse'; durationMs?: number; preset?: number; speed?: number }) =>
     request<{ ok: boolean }>('POST', `/api/cameras/${id}/ptz`, body),

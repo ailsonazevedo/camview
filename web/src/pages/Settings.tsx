@@ -1,9 +1,17 @@
-import { Bell, Loader2, Network } from 'lucide-react';
+import { Bell, Check, House, Loader2, Network, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
-import { api, type Settings as SettingsData } from '../lib/api';
+import { inputCls } from '../components/CameraForm';
+import { api, type Camera, type Home, type Settings as SettingsData } from '../lib/api';
+
+interface Props {
+  homes: Home[];
+  /** Todas as câmeras (de todas as casas). */
+  cameras: Camera[];
+  onHomesChanged: () => void;
+}
 
 /** Configurações gerais do CamView. Cada grupo é uma seção; novas opções entram aqui. */
-export function Settings() {
+export function Settings({ homes, cameras, onHomesChanged }: Props) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [saving, setSaving] = useState<keyof SettingsData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +44,10 @@ export function Settings() {
       </div>
 
       {error && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
+
+      <Group icon={House} title="Casas">
+        <Homes homes={homes} cameras={cameras} onChanged={onHomesChanged} />
+      </Group>
 
       {settings === null ? (
         !error && <Loader2 className="h-5 w-5 animate-spin text-zinc-500" />
@@ -70,6 +82,95 @@ export function Settings() {
         </>
       )}
     </div>
+  );
+}
+
+/** Locais com câmeras: o seletor do cabeçalho troca entre eles. */
+function Homes({ homes, cameras, onChanged }: { homes: Home[]; cameras: Camera[]; onChanged: () => void }) {
+  const [editing, setEditing] = useState<{ id: string | null; name: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (key: string, fn: () => Promise<unknown>) => {
+    setError(null);
+    setBusy(key);
+    try {
+      await fn();
+      setEditing(null);
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const save = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    const { id, name } = editing;
+    run(id ?? 'new', () => (id ? api.renameHome(id, name) : api.createHome(name)));
+  };
+
+  const form = (
+    <form onSubmit={save} className="flex items-center gap-2 p-3">
+      <input
+        className={inputCls}
+        value={editing?.name ?? ''}
+        onChange={(e) => setEditing((cur) => cur && { ...cur, name: e.target.value })}
+        onKeyDown={(e) => e.key === 'Escape' && setEditing(null)}
+        placeholder="Casa da praia"
+        maxLength={60}
+        required
+        autoFocus
+      />
+      <button type="submit" disabled={busy !== null} title="Salvar" className="rounded-md bg-emerald-500 p-2 text-zinc-950 hover:bg-emerald-400 disabled:opacity-60">
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+      </button>
+      <button type="button" onClick={() => setEditing(null)} title="Cancelar" className="rounded-md p-2 text-zinc-400 hover:bg-white/5">
+        <X className="h-4 w-4" />
+      </button>
+    </form>
+  );
+
+  return (
+    <>
+      {homes.map((h) => {
+        if (editing?.id === h.id) return <div key={h.id}>{form}</div>;
+        const count = cameras.filter((c) => c.homeId === h.id).length;
+        const blocked = homes.length === 1 ? 'É preciso ter pelo menos uma casa' : count > 0 ? 'Mova ou remova as câmeras desta casa antes de excluí-la' : null;
+        return (
+          <div key={h.id} className="flex items-center gap-3 p-4">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium text-zinc-200">{h.name}</span>
+              <span className="block text-[12px] text-zinc-500">
+                {count} {count === 1 ? 'câmera' : 'câmeras'}
+              </span>
+            </span>
+            <button onClick={() => setEditing({ id: h.id, name: h.name })} title="Renomear" className="rounded-md p-2 text-zinc-400 hover:bg-white/5 hover:text-zinc-200">
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => run(h.id, () => api.deleteHome(h.id))}
+              disabled={blocked !== null || busy !== null}
+              title={blocked ?? 'Excluir'}
+              className="rounded-md p-2 text-red-400/80 hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              {busy === h.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+        );
+      })}
+      {editing?.id === null ? (
+        form
+      ) : (
+        <button onClick={() => setEditing({ id: null, name: '' })} className="flex w-full items-center gap-2 p-4 text-left text-[13px] font-medium text-emerald-400 hover:bg-white/[0.02]">
+          <Plus className="h-4 w-4" />
+          Adicionar casa
+        </button>
+      )}
+      {error && <div className="px-4 py-3 text-sm text-red-300">{error}</div>}
+    </>
   );
 }
 

@@ -9,6 +9,8 @@ export type LensPosition = 'top' | 'bottom';
 
 export interface Camera {
   id: string;
+  /** Casa (local) a que a câmera pertence. */
+  homeId: string;
   name: string;
   host: string;
   username: string;
@@ -146,6 +148,10 @@ export function validateInput(body: unknown, partial = false): { value?: Partial
   if (b.name !== undefined) {
     if (typeof b.name !== 'string' || !b.name.trim()) return { error: 'Nome é obrigatório' };
     out.name = b.name.trim();
+  }
+  if (b.homeId !== undefined) {
+    if (typeof b.homeId !== 'string' || !b.homeId) return { error: 'Casa inválida' };
+    out.homeId = b.homeId;
   }
   if (b.host !== undefined) {
     if (typeof b.host !== 'string' || !/^[a-zA-Z0-9.-]+$/.test(b.host.trim())) return { error: 'IP/host inválido' };
@@ -322,6 +328,19 @@ class CameraStore {
     if (this.cameras.length === before) return false;
     await this.save();
     return true;
+  }
+
+  /** Câmeras sem casa (cadastros antigos) ou de uma casa que não existe mais vão para `fallback`. */
+  async assignHomes(valid: Set<string>, fallback: string) {
+    const orphans = this.cameras.filter((c) => !c.homeId || !valid.has(c.homeId));
+    if (!orphans.length) return;
+    for (const c of orphans) c.homeId = fallback;
+    await this.save();
+  }
+
+  /** Ids das câmeras de uma casa. */
+  idsOf(homeId: string) {
+    return new Set(this.cameras.filter((c) => c.homeId === homeId).map((c) => c.id));
   }
 
   async reorder(ids: string[]) {

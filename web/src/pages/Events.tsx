@@ -20,7 +20,9 @@ const dayLabel = (key: string) => {
 const time = (iso: string) => new Date(iso).toLocaleTimeString('pt-BR');
 
 interface Props {
+  /** Câmeras da casa selecionada. */
   cameras: Camera[];
+  homeId: string;
   /** Eventos que chegaram em tempo real (SSE) — entram no topo da lista. */
   live: CameraEvent[];
   openId: string | null;
@@ -28,7 +30,7 @@ interface Props {
   onUnseenChange: (n: number) => void;
 }
 
-export function Events({ cameras, live, openId, onOpenChange, onUnseenChange }: Props) {
+export function Events({ cameras, homeId, live, openId, onOpenChange, onUnseenChange }: Props) {
   const [camera, setCamera] = useState('');
   const [type, setType] = useState<'' | EventType>('');
   const [date, setDate] = useState('');
@@ -42,7 +44,7 @@ export function Events({ cameras, live, openId, onOpenChange, onUnseenChange }: 
   const [enabled, setEnabled] = useState(true);
   const camOf = useCallback((id: string) => cameras.find((c) => c.id === id), [cameras]);
 
-  const filter = useMemo(() => ({ camera, type, date }), [camera, type, date]);
+  const filter = useMemo(() => ({ home: homeId, camera, type, date }), [homeId, camera, type, date]);
 
   const load = useCallback(async () => {
     const list = await api.events({ ...filter, limit: PAGE }).catch(() => []);
@@ -84,7 +86,7 @@ export function Events({ cameras, live, openId, onOpenChange, onUnseenChange }: 
   };
 
   const markSeen = async (ids: string[] | 'all') => {
-    const { unseen } = await api.markSeen(ids);
+    const { unseen } = await api.markSeen(ids, homeId);
     onUnseenChange(unseen);
     setItems((cur) => cur?.map((e) => (ids === 'all' || ids.includes(e.id) ? { ...e, seen: true } : e)) ?? cur);
   };
@@ -99,7 +101,7 @@ export function Events({ cameras, live, openId, onOpenChange, onUnseenChange }: 
     setItems((cur) => cur?.filter((e) => !ids.includes(e.id)) ?? cur);
     setSelecting(null);
     if (openId && ids.includes(openId)) onOpenChange(null);
-    api.eventsSummary().then((s) => onUnseenChange(s.unseen)).catch(() => {});
+    api.eventsSummary(homeId).then((s) => onUnseenChange(s.unseen)).catch(() => {});
   };
 
   const toggleNotify = async () => {

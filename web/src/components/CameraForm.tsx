@@ -1,12 +1,15 @@
 import { CheckCircle2, ChevronDown, Loader2, Plug, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import { api, type Camera, type CameraForm as Form, type Lenses, type TestResult } from '../lib/api';
+import { api, type Camera, type CameraForm as Form, type Home, type Lenses, type TestResult } from '../lib/api';
 
 interface Props {
   /** Câmera em edição; ausente = nova câmera. */
   camera?: Camera;
   /** Pré-preenchimento (ex.: vindo da busca na rede). */
   initial?: Partial<Form>;
+  homes: Home[];
+  /** Casa selecionada no painel: destino de uma câmera nova. */
+  homeId: string;
   onSaved: () => void;
   onCancel: () => void;
 }
@@ -14,8 +17,9 @@ interface Props {
 export const inputCls =
   'w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/60 focus:ring-2 focus:ring-emerald-500/20';
 
-export function CameraForm({ camera, initial, onSaved, onCancel }: Props) {
+export function CameraForm({ camera, initial, homes, homeId, onSaved, onCancel }: Props) {
   const [form, setForm] = useState<Form>(() => ({
+    homeId: camera?.homeId ?? homeId,
     name: camera?.name ?? initial?.name ?? '',
     host: camera?.host ?? initial?.host ?? '',
     username: camera?.username ?? initial?.username ?? 'admin',
@@ -37,7 +41,7 @@ export function CameraForm({ camera, initial, onSaved, onCancel }: Props) {
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
-    if (key !== 'name' && key !== 'lensNames' && key !== 'ptzLens' && key !== 'lenses' && key !== 'recording' && key !== 'events') setTest(null);
+    if (key !== 'name' && key !== 'homeId' && key !== 'lensNames' && key !== 'ptzLens' && key !== 'lenses' && key !== 'recording' && key !== 'events') setTest(null);
   };
 
   const runTest = async () => {
@@ -92,6 +96,17 @@ export function CameraForm({ camera, initial, onSaved, onCancel }: Props) {
               placeholder={camera?.hasPassword ? '••••••••' : ''}
             />
           </Field>
+          {homes.length > 1 && (
+            <Field label="Casa" hint="Onde a câmera está instalada">
+              <select className={inputCls} value={form.homeId} onChange={(e) => set('homeId', e.target.value)}>
+                {homes.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
         </div>
       </Section>
 

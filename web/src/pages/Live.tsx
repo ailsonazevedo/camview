@@ -69,7 +69,7 @@ export function Live({
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 ring-1 ring-emerald-500/30">
             <Plus className="h-6 w-6 text-emerald-400" />
           </div>
-          <h2 className="mt-5 text-lg font-semibold">Nenhuma câmera cadastrada</h2>
+          <h2 className="mt-5 text-lg font-semibold">Nenhuma câmera nesta casa</h2>
           <p className="mt-1.5 max-w-sm text-sm text-zinc-400">Adicione as câmeras do ICSee para acompanhar tudo ao vivo por aqui.</p>
           <button onClick={onManage} className="mt-6 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400">
             Adicionar câmera

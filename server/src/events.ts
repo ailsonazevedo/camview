@@ -381,13 +381,14 @@ class EventManager {
     return () => this.listeners.delete(l);
   }
 
-  list(filter: { cameraId?: string; type?: EventType; date?: string; before?: string; limit?: number }) {
+  list(filter: { cameraId?: string; cameraIds?: Set<string>; type?: EventType; date?: string; before?: string; limit?: number }) {
     const limit = Math.min(500, filter.limit ?? 100);
     const out: CameraEvent[] = [];
     const all = this.store.all();
     for (let i = all.length - 1; i >= 0 && out.length < limit; i--) {
       const e = all[i];
       if (filter.cameraId && e.cameraId !== filter.cameraId) continue;
+      if (filter.cameraIds && !filter.cameraIds.has(e.cameraId)) continue;
       if (filter.type && e.type !== filter.type) continue;
       if (filter.date && localDate(new Date(e.start)) !== filter.date) continue;
       if (filter.before && e.start >= filter.before) continue;
@@ -396,12 +397,15 @@ class EventManager {
     return out;
   }
 
-  unseenCount() {
-    return this.store.all().filter((e) => !e.seen).length;
+  /** `cameraIds` limita às câmeras de uma casa. */
+  unseenCount(cameraIds?: Set<string>) {
+    return this.store.all().filter((e) => !e.seen && (!cameraIds || cameraIds.has(e.cameraId))).length;
   }
 
-  markSeen(ids: string[] | 'all') {
-    for (const e of this.store.all()) if (ids === 'all' || ids.includes(e.id)) e.seen = true;
+  markSeen(ids: string[] | 'all', cameraIds?: Set<string>) {
+    for (const e of this.store.all()) {
+      if (ids === 'all' ? !cameraIds || cameraIds.has(e.cameraId) : ids.includes(e.id)) e.seen = true;
+    }
     this.store.changed();
   }
 

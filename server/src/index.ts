@@ -4,6 +4,7 @@ import fastifyProxy from '@fastify/http-proxy';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { type Camera, type CameraInput, type Protocol, type RelocationReason, store, toPublic, validateInput } from './cameras.js';
+import { homes, validateHomeName } from './homes.js';
 import * as control from './control.js';
 import { DvripError } from './dvrip.js';
 import { discover, normalizeMac, reachable } from './discover.js';
@@ -21,6 +22,8 @@ const WEB_DIST = path.resolve(import.meta.dirname, '../../web/dist');
 const app = Fastify({ logger: { level: 'info' } });
 
 await store.load();
+await homes.load();
+await store.assignHomes(new Set(homes.list().map((h) => h.id)), homes.list()[0].id);
 await media.loadSettings();
 await location.initLocation();
 if (!(await location.status()).available) {
@@ -28,6 +31,35 @@ if (!(await location.status()).available) {
 }
 recordings.init(app.log);
 await events.init(app.log);
+
+// ---------- casas ----------
+
+/** Ids das câmeras de uma casa (`?home=`); sem casa = sem filtro. */
+const camerasOf = (home?: string) => (home ? store.idsOf(home) : undefined);
+
+app.get('/api/homes', async () => homes.list());
+
+app.post<{ Body: { name?: unknown } }>('/api/homes', async (req, reply) => {
+  const { value, error } = validateHomeName(req.body?.name);
+  if (error) return reply.code(400).send({ error });
+  return reply.code(201).send(await homes.add(value!));
+});
+
+app.put<{ Params: { id: string }; Body: { name?: unknown } }>('/api/homes/:id', async (req, reply) => {
+  const { value, error } = validateHomeName(req.body?.name);
+  if (error) return reply.code(400).send({ error });
+  const home = await homes.update(req.params.id, { name: value });
+  if (!home) return reply.code(404).send({ error: 'Casa não encontrada' });
+  return home;
+});
+
+app.delete<{ Params: { id: string } }>('/api/homes/:id', async (req, reply) => {
+  if (!homes.get(req.params.id)) return reply.code(404).send({ error: 'Casa não encontrada' });
+  if (homes.list().length === 1) return reply.code(400).send({ error: 'É preciso ter pelo menos uma casa' });
+  if (store.idsOf(req.params.id).size > 0) return reply.code(400).send({ error: 'Mova ou remova as câmeras desta casa antes de excluí-la' });
+  await homes.remove(req.params.id);
+  return reply.code(204).send();
+});
 
 // ---------- câmeras ----------
 
@@ -69,6 +101,8 @@ const relocator = createRelocator({ log: app.log, move: (cam, host, by, identity
 app.post('/api/cameras', async (req, reply) => {
   const { value, error } = validateInput(req.body);
   if (error) return reply.code(400).send({ error });
+  value!.homeId ??= homes.list()[0].id;
+  if (!homes.get(value!.homeId)) return reply.code(400).send({ error: 'Casa não encontrada' });
   const cam = await store.add(value as CameraInput);
   await go2rtc.syncCamera(cam).catch((err) => req.log.warn({ err }, 'falha ao registrar no go2rtc'));
   refreshDeviceInfo(cam);
@@ -82,6 +116,7 @@ app.put<{ Params: { id: string } }>('/api/cameras/:id', async (req, reply) => {
   if (!cam) return reply.code(404).send({ error: 'Câmera não encontrada' });
   const { value, error } = validateInput(req.body, true);
   if (error) return reply.code(400).send({ error });
+  if (value!.homeId !== undefined && !homes.get(value!.homeId)) return reply.code(400).send({ error: 'Casa não encontrada' });
   // senha vazia na edição = manter a atual
   if (value!.password === '') delete value!.password;
   const connectionChanged = (['host', 'username', 'password', 'protocol', 'rtspPort', 'dvripPort', 'channel'] as const).some(
@@ -340,11 +375,15 @@ app.post<{ Params: { id: string }; Body: { action?: unknown; quality?: unknown }
   return recordings.status();
 });
 
-app.get<{ Querystring: { camera?: string; date?: string } }>('/api/recordings', async (req) =>
-  media.listRecordings(recordings.activePaths(), { cameraId: req.query.camera || undefined, date: req.query.date || undefined }),
+app.get<{ Querystring: { camera?: string; home?: string; date?: string } }>('/api/recordings', async (req) =>
+  media.listRecordings(recordings.activePaths(), {
+    cameraId: req.query.camera || undefined,
+    cameraIds: camerasOf(req.query.home),
+    date: req.query.date || undefined,
+  }),
 );
 
-app.get('/api/recordings/dates', async () => media.recordingDates());
+app.get<{ Querystring: { home?: string } }>('/api/recordings/dates', async (req) => media.recordingDates(camerasOf(req.query.home)));
 
 // ---------- capturas ----------
 
@@ -361,7 +400,9 @@ app.post<{ Querystring: { camera?: string; lens?: string }; Body: Buffer }>('/ap
   }
 });
 
-app.get<{ Querystring: { camera?: string } }>('/api/captures', async (req) => media.listCaptures(req.query.camera || undefined));
+app.get<{ Querystring: { camera?: string; home?: string } }>('/api/captures', async (req) =>
+  media.listCaptures(req.query.camera || undefined, camerasOf(req.query.home)),
+);
 
 /** Apaga uma gravação (não a que está sendo gravada) ou captura. */
 app.delete<{ Querystring: { path?: string } }>('/api/media', async (req, reply) => {
@@ -418,10 +459,11 @@ app.put<{ Body: { retentionGB?: unknown; eventsDays?: unknown; detectionsEnabled
 
 const EVENT_TYPES = new Set<EventType>(['human', 'motion', 'other']);
 
-app.get<{ Querystring: { camera?: string; type?: string; date?: string; before?: string; limit?: string } }>('/api/events', async (req) => {
+app.get<{ Querystring: { camera?: string; home?: string; type?: string; date?: string; before?: string; limit?: string } }>('/api/events', async (req) => {
   const q = req.query;
   return events.list({
     cameraId: q.camera || undefined,
+    cameraIds: camerasOf(q.home),
     type: EVENT_TYPES.has(q.type as EventType) ? (q.type as EventType) : undefined,
     date: q.date || undefined,
     before: q.before || undefined,
@@ -429,13 +471,18 @@ app.get<{ Querystring: { camera?: string; type?: string; date?: string; before?:
   });
 });
 
-app.get('/api/events/summary', async () => ({ enabled: media.getSettings().detectionsEnabled, unseen: events.unseenCount(), cameras: events.status() }));
+app.get<{ Querystring: { home?: string } }>('/api/events/summary', async (req) => ({
+  enabled: media.getSettings().detectionsEnabled,
+  unseen: events.unseenCount(camerasOf(req.query.home)),
+  cameras: events.status(),
+}));
 
-app.post<{ Body: { ids?: unknown; all?: unknown } }>('/api/events/seen', async (req, reply) => {
-  if (req.body?.all === true) events.markSeen('all');
+app.post<{ Body: { ids?: unknown; all?: unknown; home?: unknown } }>('/api/events/seen', async (req, reply) => {
+  const cameraIds = camerasOf(typeof req.body?.home === 'string' ? req.body.home : undefined);
+  if (req.body?.all === true) events.markSeen('all', cameraIds);
   else if (Array.isArray(req.body?.ids) && req.body.ids.every((i) => typeof i === 'string')) events.markSeen(req.body.ids as string[]);
   else return reply.code(400).send({ error: 'Informe ids ou all' });
-  return { unseen: events.unseenCount() };
+  return { unseen: events.unseenCount(cameraIds) };
 });
 
 app.delete<{ Body: { ids?: unknown } }>('/api/events', async (req, reply) => {

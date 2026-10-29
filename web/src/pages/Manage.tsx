@@ -23,17 +23,20 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { CameraForm } from '../components/CameraForm';
-import { api, type Camera, type CameraForm as Form, type CameraHealth, type FoundDevice, type RelocateResult } from '../lib/api';
+import { api, type Camera, type CameraForm as Form, type CameraHealth, type FoundDevice, type Home, type RelocateResult } from '../lib/api';
 
 interface Props {
+  /** Câmeras da casa selecionada. */
   cameras: Camera[];
+  homes: Home[];
+  home: Home;
   reachable: Record<string, boolean>;
   onChanged: () => void;
 }
 
 type Editing = { camera?: Camera; initial?: Partial<Form> } | null;
 
-export function Manage({ cameras, reachable, onChanged }: Props) {
+export function Manage({ cameras, homes, home, reachable, onChanged }: Props) {
   const [editing, setEditing] = useState<Editing>(null);
   const [found, setFound] = useState<FoundDevice[] | 'scanning' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +119,10 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
     <div className="mx-auto max-w-5xl space-y-6 p-4 lg:p-6">
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Câmeras</h2>
-          <p className="text-sm text-zinc-500">Cadastre, teste e organize os dispositivos.</p>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Câmeras <span className="text-zinc-500">· {home.name}</span>
+          </h2>
+          <p className="text-sm text-zinc-500">Cadastre, teste e organize os dispositivos desta casa.</p>
         </div>
         <div className="ml-auto flex flex-wrap gap-2">
           <button
@@ -263,7 +268,7 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
 
       {cameras.length === 0 ? (
         <div className="rounded-xl border border-dashed border-white/10 p-10 text-center text-sm text-zinc-500">
-          Nenhuma câmera ainda. Use “Procurar na rede” para encontrar as câmeras do ICSee.
+          Nenhuma câmera em {home.name} ainda. Use “Procurar na rede” para encontrar as câmeras do ICSee.
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
@@ -375,6 +380,8 @@ export function Manage({ cameras, reachable, onChanged }: Props) {
           <CameraForm
             camera={editing.camera}
             initial={editing.initial}
+            homes={homes}
+            homeId={home.id}
             onCancel={() => setEditing(null)}
             onSaved={() => {
               setEditing(null);

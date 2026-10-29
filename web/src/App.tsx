@@ -1,7 +1,8 @@
 import { Activity, Bell, Cctv, Film, Move, Server, Settings2, ShieldCheck, SlidersHorizontal, TriangleAlert, Video } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EventToasts, type ToastItem } from './components/EventBits';
-import { api, type Camera, type CameraEvent, type Health, type RecordingStatus, viewsOf } from './lib/api';
+import { HomeSwitcher } from './components/HomeSwitcher';
+import { api, type Camera, type CameraEvent, type Health, type Home, type RecordingStatus, viewsOf } from './lib/api';
 import { eventLabel, showSystemNotification, useEventStream } from './lib/events';
 import { Live } from './pages/Live';
 import { Events } from './pages/Events';
@@ -24,12 +25,23 @@ const pageFromHash = (): Page =>
           ? 'settings'
           : 'live';
 
+const HOME_KEY = 'camview.home';
+const savedHome = () => {
+  try {
+    return localStorage.getItem(HOME_KEY);
+  } catch {
+    return null;
+  }
+};
+
 /** #/eventos/<id> abre o evento direto. */
 const eventFromHash = () => (location.hash.startsWith('#/eventos/') ? decodeURIComponent(location.hash.slice('#/eventos/'.length)) : null);
 
 export default function App() {
   const [page, setPage] = useState<Page>(pageFromHash);
   const [cameras, setCameras] = useState<Camera[] | null>(null);
+  const [homes, setHomes] = useState<Home[]>([]);
+  const [homePref, setHomePref] = useState<string | null>(savedHome);
   const [reachable, setReachable] = useState<Record<string, boolean>>({});
   const [backend, setBackend] = useState<Health | null>(null);
   const [focusedKey, setFocusedKey] = useState<string | null>(null);
@@ -55,7 +67,9 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      setCameras(await api.list());
+      const [h, c] = await Promise.all([api.homes(), api.list()]);
+      setHomes(h);
+      setCameras(c);
       setReachable(await api.status());
     } catch {
       setCameras((c) => c ?? []);
@@ -66,6 +80,19 @@ export default function App() {
     refresh();
   }, [refresh]);
 
+  // casa selecionada (lembrada no navegador); se sumiu, volta para a primeira
+  const home = homes.find((h) => h.id === homePref) ?? homes[0];
+  const homeId = home?.id ?? '';
+  const homeCameras = useMemo(() => cameras?.filter((c) => c.homeId === homeId) ?? [], [cameras, homeId]);
+  const selectHome = (id: string) => {
+    setHomePref(id);
+    setFocusedKey(null);
+    setToasts([]);
+    try {
+      localStorage.setItem(HOME_KEY, id);
+    } catch {}
+  };
+
   // eventos em tempo real
   const camerasRef = useRef<Camera[]>([]);
   camerasRef.current = cameras ?? [];
@@ -75,24 +102,38 @@ export default function App() {
   }, []);
   useEventStream((kind, event) => {
     setLiveEvents((cur) => [event, ...cur.filter((e) => e.id !== event.id)].slice(0, 200));
+    const cam = camerasRef.current.find((c) => c.id === event.cameraId);
+    const here = cam?.homeId === homeId;
     if (kind === 'new') {
-      setUnseen((n) => n + 1);
-      const key = `${event.id}-${Date.now()}`;
-      setToasts((cur) => [{ event, key }, ...cur].slice(0, 4));
-      setTimeout(() => setToasts((cur) => cur.filter((t) => t.key !== key)), 10_000);
-      const cam = camerasRef.current.find((c) => c.id === event.cameraId);
-      showSystemNotification(eventLabel(event), `${cam?.name ?? event.cameraId} · ${new Date(event.start).toLocaleTimeString('pt-BR')}`, null, () => openEvent(event));
+      // avisos na tela só da casa aberta; a notificação do sistema vale para todas
+      if (here) {
+        setUnseen((n) => n + 1);
+        const key = `${event.id}-${Date.now()}`;
+        setToasts((cur) => [{ event, key }, ...cur].slice(0, 4));
+        setTimeout(() => setToasts((cur) => cur.filter((t) => t.key !== key)), 10_000);
+      }
+      const where = homes.length > 1 ? `${homes.find((h) => h.id === cam?.homeId)?.name ?? ''} · ` : '';
+      showSystemNotification(
+        eventLabel(event),
+        `${where}${cam?.name ?? event.cameraId} · ${new Date(event.start).toLocaleTimeString('pt-BR')}`,
+        null,
+        () => {
+          if (cam && !here) selectHome(cam.homeId);
+          openEvent(event);
+        },
+      );
     } else {
       // a foto chega logo depois: atualiza a imagem do aviso
       setToasts((cur) => cur.map((t) => (t.event.id === event.id ? { ...t, event } : t)));
     }
   });
   useEffect(() => {
-    const tick = () => api.eventsSummary().then((s) => setUnseen(s.unseen)).catch(() => {});
+    if (!homeId) return;
+    const tick = () => api.eventsSummary(homeId).then((s) => setUnseen(s.unseen)).catch(() => {});
     tick();
     const id = setInterval(tick, 30_000);
     return () => clearInterval(id);
-  }, []);
+  }, [homeId]);
   // detecções acontecendo agora (destaque nos blocos ao vivo); redesenha
   // logo depois que um alarme termina para tirar o destaque
   const [, setTick] = useState(0);
@@ -142,7 +183,8 @@ export default function App() {
     go('live');
   };
 
-  const online = cameras?.filter((c) => reachable[c.id]).length ?? 0;
+  const online = homeCameras.filter((c) => reachable[c.id]).length;
+  const homeLive = useMemo(() => liveEvents.filter((e) => homeCameras.some((c) => c.id === e.cameraId)), [liveEvents, homeCameras]);
   const systemOk = backend?.ok && backend.go2rtc;
 
   return (
@@ -170,7 +212,7 @@ export default function App() {
 
         <div className="mt-6 px-5 text-[10px] font-semibold tracking-widest text-zinc-500 uppercase">Dispositivos</div>
         <div className="cv-scroll mt-2 flex-1 space-y-1 overflow-y-auto px-3 pb-3">
-          {cameras?.map((cam) => (
+          {homeCameras.map((cam) => (
             <div key={cam.id} className="rounded-lg border border-white/5 bg-white/[0.02] p-2">
               <div className="flex items-center gap-2 px-1">
                 <span
@@ -213,7 +255,7 @@ export default function App() {
             <Cctv className="h-3.5 w-3.5" />
             Câmeras online
             <span className="ml-auto font-mono text-zinc-300">
-              {online}/{cameras?.length ?? 0}
+              {online}/{homeCameras.length}
             </span>
           </div>
         </div>
@@ -242,6 +284,16 @@ export default function App() {
               Configurações
             </NavItem>
           </nav>
+          {home && (
+            <HomeSwitcher
+              homes={homes}
+              cameras={cameras ?? []}
+              reachable={reachable}
+              value={home}
+              onChange={selectHome}
+              onManage={() => go('settings')}
+            />
+          )}
           <div
             className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium sm:flex ${
               backend === null
@@ -283,7 +335,7 @@ export default function App() {
 
         <EventToasts
           items={toasts}
-          cameras={cameras ?? []}
+          cameras={homeCameras}
           onOpen={(e) => {
             setToasts((cur) => cur.filter((t) => t.event.id !== e.id));
             openEvent(e);
@@ -292,10 +344,12 @@ export default function App() {
         />
 
         <main className="min-h-0 flex-1">
-          {cameras === null ? null : page === 'events' ? (
+          {cameras === null || !home ? null : page === 'events' ? (
             <Events
-              cameras={cameras}
-              live={liveEvents}
+              key={homeId}
+              cameras={homeCameras}
+              homeId={homeId}
+              live={homeLive}
               openId={openEventId}
               onOpenChange={(id) => {
                 location.hash = id ? `#/eventos/${encodeURIComponent(id)}` : '#/eventos';
@@ -303,12 +357,13 @@ export default function App() {
               onUnseenChange={setUnseen}
             />
           ) : page === 'settings' ? (
-            <Settings />
+            <Settings homes={homes} cameras={cameras} onHomesChanged={refresh} />
           ) : page === 'recordings' ? (
-            <Recordings cameras={cameras} recStatus={recStatus} />
+            <Recordings key={homeId} cameras={homeCameras} homeId={homeId} recStatus={recStatus} />
           ) : page === 'live' ? (
             <Live
-              cameras={cameras}
+              key={homeId}
+              cameras={homeCameras}
               reachable={reachable}
               focusedKey={focusedKey}
               onFocus={setFocusedKey}
@@ -324,7 +379,7 @@ export default function App() {
               }}
             />
           ) : (
-            <Manage cameras={cameras} reachable={reachable} onChanged={refresh} />
+            <Manage cameras={homeCameras} homes={homes} home={home} reachable={reachable} onChanged={refresh} />
           )}
         </main>
       </div>

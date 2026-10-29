@@ -131,10 +131,10 @@ async function listDir(dir: string) {
   }
 }
 
-export async function listRecordings(activePaths: Set<string>, filter: { cameraId?: string; date?: string } = {}) {
+export async function listRecordings(activePaths: Set<string>, filter: { cameraId?: string; cameraIds?: Set<string>; date?: string } = {}) {
   const out: RecordingFile[] = [];
   for (const camDir of await listDir(recordingsDir())) {
-    if (!camDir.isDirectory() || (filter.cameraId && camDir.name !== filter.cameraId)) continue;
+    if (!camDir.isDirectory() || (filter.cameraId && camDir.name !== filter.cameraId) || (filter.cameraIds && !filter.cameraIds.has(camDir.name))) continue;
     for (const dayDir of await listDir(path.join(recordingsDir(), camDir.name))) {
       if (!dayDir.isDirectory() || (filter.date && dayDir.name !== filter.date)) continue;
       for (const f of await listDir(path.join(recordingsDir(), camDir.name, dayDir.name))) {
@@ -162,10 +162,11 @@ export async function listRecordings(activePaths: Set<string>, filter: { cameraI
 }
 
 /** Datas (YYYY-MM-DD) que têm gravações, mais recentes primeiro. */
-export async function recordingDates() {
+/** `cameraIds` limita às câmeras de uma casa. */
+export async function recordingDates(cameraIds?: Set<string>) {
   const dates = new Set<string>();
   for (const camDir of await listDir(recordingsDir())) {
-    if (!camDir.isDirectory()) continue;
+    if (!camDir.isDirectory() || (cameraIds && !cameraIds.has(camDir.name))) continue;
     for (const d of await listDir(path.join(recordingsDir(), camDir.name))) if (d.isDirectory()) dates.add(d.name);
   }
   return [...dates].sort().reverse();
@@ -231,10 +232,10 @@ export async function saveCapture(cameraId: string, lens: string, jpeg: Buffer) 
   return { path: rel, cameraId, lens, time: now.toISOString(), bytes: jpeg.length } satisfies CaptureFile;
 }
 
-export async function listCaptures(cameraId?: string) {
+export async function listCaptures(cameraId?: string, cameraIds?: Set<string>) {
   const out: CaptureFile[] = [];
   for (const camDir of await listDir(capturesDir())) {
-    if (!camDir.isDirectory() || (cameraId && camDir.name !== cameraId)) continue;
+    if (!camDir.isDirectory() || (cameraId && camDir.name !== cameraId) || (cameraIds && !cameraIds.has(camDir.name))) continue;
     for (const f of await listDir(path.join(capturesDir(), camDir.name))) {
       const m = /^(\d{8}-\d{6})\d{3}_(full|top|bottom)\.jpg$/.exec(f.name);
       if (!f.isFile() || !m) continue;

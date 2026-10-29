@@ -26,11 +26,13 @@ const todayStr = () => {
 };
 
 interface Props {
+  /** Câmeras da casa selecionada. */
   cameras: Camera[];
+  homeId: string;
   recStatus: Record<string, RecordingStatus>;
 }
 
-export function Recordings({ cameras, recStatus }: Props) {
+export function Recordings({ cameras, homeId, recStatus }: Props) {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const [storage, setStorage] = useState<Storage | null>(null);
   // muda ao trocar de local: recarrega as listas
@@ -93,9 +95,9 @@ export function Recordings({ cameras, recStatus }: Props) {
       </div>
 
       {tab === 'videos' ? (
-        <Videos key={reloadKey} cameras={cameras} camName={camName} recStatus={recStatus} onChanged={refreshStorage} />
+        <Videos key={reloadKey} cameras={cameras} homeId={homeId} camName={camName} recStatus={recStatus} onChanged={refreshStorage} />
       ) : (
-        <Captures key={reloadKey} cameras={cameras} camName={camName} onChanged={refreshStorage} />
+        <Captures key={reloadKey} cameras={cameras} homeId={homeId} camName={camName} onChanged={refreshStorage} />
       )}
     </div>
   );
@@ -163,11 +165,13 @@ function StorageMeter({ storage, onSaved }: { storage: Storage; onSaved: () => v
 
 function Videos({
   cameras,
+  homeId,
   camName,
   recStatus,
   onChanged,
 }: {
   cameras: Camera[];
+  homeId: string;
   camName: (id: string) => string;
   recStatus: Record<string, RecordingStatus>;
   onChanged: () => void;
@@ -182,13 +186,13 @@ function Videos({
 
   const load = useCallback(async () => {
     try {
-      const [ds, list] = await Promise.all([api.recordingDates(), api.recordings({ date, ...(camera && { camera }) })]);
+      const [ds, list] = await Promise.all([api.recordingDates(homeId), api.recordings({ date, home: homeId, camera })]);
       setDates(ds);
       setItems(list);
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [date, camera]);
+  }, [date, homeId, camera]);
 
   useEffect(() => {
     load();
@@ -437,12 +441,22 @@ function VideoModal({ rec, camera, onClose }: { rec: RecordingFile; camera?: Cam
 
 // ---------------------------------------------------------------- capturas
 
-function Captures({ cameras, camName, onChanged }: { cameras: Camera[]; camName: (id: string) => string; onChanged: () => void }) {
+function Captures({
+  cameras,
+  homeId,
+  camName,
+  onChanged,
+}: {
+  cameras: Camera[];
+  homeId: string;
+  camName: (id: string) => string;
+  onChanged: () => void;
+}) {
   const [camera, setCamera] = useState('');
   const [items, setItems] = useState<CaptureFile[] | null>(null);
   const [open, setOpen] = useState<number | null>(null);
 
-  const load = useCallback(() => api.captures(camera || undefined).then(setItems).catch(() => setItems([])), [camera]);
+  const load = useCallback(() => api.captures({ home: homeId, camera }).then(setItems).catch(() => setItems([])), [homeId, camera]);
   useEffect(() => {
     load();
   }, [load]);
